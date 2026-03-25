@@ -21,7 +21,7 @@ class DashboardState extends ChangeNotifier {
   double mainVoltage = 0.0;
   double current780 = 0.0;
   double current740 = 0.0;
-  double mcTempC = 45.0; 
+  double mcTempC = 45.0;
   double battTempC = 35.0;
 
   // Energy
@@ -41,7 +41,7 @@ class DashboardState extends ChangeNotifier {
 
   final Queue<double> _speedHistory = Queue<double>();
   final Queue<double> _powerKwHistory = Queue<double>();
-  
+
   double instKmPerKwh = 0.0;
   double avgKmPerKwh = 0.0;
 
@@ -54,7 +54,7 @@ class DashboardState extends ChangeNotifier {
   List<double> bmsCells = List.filled(24, 3.80);
   double bus12V = 12.4;
   List<String> mcFaults = ["NONE"];
-  
+
   // GPS
   int gpsSatellites = 0;
   bool gpsLocked = false;
@@ -62,6 +62,18 @@ class DashboardState extends ChangeNotifier {
   // Configuration
   String apiUrl = "https://your-backend-api.local/api/telemetry";
   List<double> throttleMap = [0.0, 25.0, 50.0, 75.0, 100.0];
+
+  // Theme
+  bool useLightTheme = false;
+
+  // Speed bar thresholds
+  double speedUpperThreshold = 40.0;
+  double speedLowerThreshold = 25.0;
+
+  // Configurable graph
+  String graphMetric = "speed"; // "speed", "power", "efficiency"
+  final Queue<double> graphHistory = Queue<double>();
+  static const int maxGraphPoints = 100;
 
   void Function(String)? onUsbTx;
 
@@ -111,6 +123,23 @@ class DashboardState extends ChangeNotifier {
   void toggleSimulation(bool val) {
     enableSimulation = val;
     if (!val) isSimulated = false;
+    notifyListeners();
+  }
+
+  void toggleTheme(bool val) {
+    useLightTheme = val;
+    notifyListeners();
+  }
+
+  void updateSpeedThresholds(double lower, double upper) {
+    speedLowerThreshold = lower;
+    speedUpperThreshold = upper;
+    notifyListeners();
+  }
+
+  void updateGraphMetric(String metric) {
+    graphMetric = metric;
+    graphHistory.clear();
     notifyListeners();
   }
 
@@ -207,8 +236,8 @@ class DashboardState extends ChangeNotifier {
   }
 
   void _updateEfficiency() {
-    double powerKw = (mainVoltage * current780) / 1000.0; 
-    
+    double powerKw = (mainVoltage * current780) / 1000.0;
+
     _speedHistory.addLast(speedKmh);
     _powerKwHistory.addLast(powerKw);
     if (_speedHistory.length > 10) {
@@ -216,8 +245,10 @@ class DashboardState extends ChangeNotifier {
       _powerKwHistory.removeFirst();
     }
 
-    double avgWindowSpeed = _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
-    double avgWindowPower = _powerKwHistory.reduce((a, b) => a + b) / _powerKwHistory.length;
+    double avgWindowSpeed =
+        _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
+    double avgWindowPower =
+        _powerKwHistory.reduce((a, b) => a + b) / _powerKwHistory.length;
 
     if (avgWindowPower > 0.5 && avgWindowSpeed > 1.0) {
       instKmPerKwh = avgWindowSpeed / avgWindowPower;
@@ -227,9 +258,26 @@ class DashboardState extends ChangeNotifier {
       instKmPerKwh = 0.0;
     }
 
-    double totalEnergyKwh = energyJ780 / 3600000.0; 
+    double totalEnergyKwh = energyJ780 / 3600000.0;
     if (totalEnergyKwh > 0.001 && distanceKm > 0.001) {
       avgKmPerKwh = distanceKm / totalEnergyKwh;
+    }
+
+    // Update rolling graph history
+    double graphVal;
+    switch (graphMetric) {
+      case "power":
+        graphVal = powerKw * 1000; // W
+        break;
+      case "efficiency":
+        graphVal = instKmPerKwh;
+        break;
+      default:
+        graphVal = speedKmh;
+    }
+    graphHistory.addLast(graphVal);
+    while (graphHistory.length > maxGraphPoints) {
+      graphHistory.removeFirst();
     }
   }
 }

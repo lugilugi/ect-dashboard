@@ -57,6 +57,30 @@ class _TelemetryAppState extends State<TelemetryApp> {
 
   @override
   Widget build(BuildContext context) {
+    final state = context.watch<DashboardState>();
+
+    final darkTheme = ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: const Color(0xFF121212),
+      primaryColor: Colors.blueAccent,
+      textTheme: const TextTheme(
+        displayLarge: TextStyle(fontSize: 72, fontWeight: FontWeight.bold, color: Colors.white),
+        titleLarge: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: Colors.white70),
+        bodyMedium: TextStyle(fontSize: 18, color: Colors.white54),
+      ),
+    );
+
+    final lightTheme = ThemeData(
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: const Color(0xFFF5F5F5),
+      primaryColor: Colors.blueAccent,
+      textTheme: const TextTheme(
+        displayLarge: TextStyle(fontSize: 72, fontWeight: FontWeight.bold, color: Colors.black),
+        titleLarge: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: Colors.black87),
+        bodyMedium: TextStyle(fontSize: 18, color: Colors.black54),
+      ),
+    );
+
     return MaterialApp(
       title: 'Telemetry Dashboard',
       builder: (context, child) {
@@ -65,16 +89,7 @@ class _TelemetryAppState extends State<TelemetryApp> {
           child: child!,
         );
       },
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF121212),
-        primaryColor: Colors.blueAccent,
-        textTheme: const TextTheme(
-          displayLarge: TextStyle(fontSize: 72, fontWeight: FontWeight.bold, color: Colors.white),
-          titleLarge: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: Colors.white70),
-          bodyMedium: TextStyle(fontSize: 18, color: Colors.white54),
-        ),
-      ),
+      theme: state.useLightTheme ? lightTheme : darkTheme,
       home: const DashboardScreen(),
     );
   }

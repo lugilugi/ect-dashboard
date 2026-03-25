@@ -17,6 +17,10 @@ class UsbService {
   String _lineBuffer = "";
   final RegExp _candumpRegex = RegExp(r'can0\s+([0-9a-fA-F]+)#([0-9a-fA-F]*)');
 
+  // ESP32-C3 USB Serial/JTAG identifiers (CDC-ACM)
+  static const int _espVid = 0x303A;  // Espressif VID
+  static const int _espPid = 0x1001;  // USB Serial/JTAG PID
+
   // For simulation history
   double _mockEnergyJ780 = 0.0;
   double _mockSpeedKmh = 0.0;
@@ -75,7 +79,10 @@ class UsbService {
     _mockTimer?.cancel();
     _mockTimer = null;
 
-    UsbDevice espDevice = devices.first;
+    UsbDevice espDevice = devices.firstWhere(
+      (d) => d.vid == _espVid && d.pid == _espPid,
+      orElse: () => devices.first, // Fallback to first device if no ESP32-C3 found
+    );
     _port = await espDevice.create();
     
     if (_port == null) return;
@@ -88,6 +95,8 @@ class UsbService {
 
     await _port!.setDTR(true);
     await _port!.setRTS(true);
+    // Note: For CDC-ACM (ESP32-C3 USB Serial/JTAG), baud rate is informational
+    // only — data moves at USB speed. Set to match CAN_BAUD_RATE for consistency.
     await _port!.setPortParameters(
       500000, 
       UsbPort.DATABITS_8,
@@ -123,11 +132,19 @@ class UsbService {
       
       int throttle = ((sin(t / 2) + 1.2) * 40).toInt().clamp(0, 100); 
       bool braking = (t % 8 > 6);
-      int brake = braking ? 1 : 0;
-      if (braking) throttle = 0; 
+      if (braking) { throttle = 0; }
 
-      int pedalRaw = (throttle << 1) | brake;
-      _parseCandumpLine("can0 110#${pedalRaw.toRadixString(16).padLeft(2, '0')}");
+      // Build proper 6-byte PedalPayload: [filtered_throttle:u16LE] [flags:u8] [seq:u8] [raw_adc:u16LE]
+      int throttle15bit = ((throttle / 100.0) * 32767).toInt().clamp(0, 32767);
+      int flags = braking ? 0x04 : 0x00; // bit 2 = brake_active
+      int seq = (t * 10).toInt() & 0xFF;
+      String tLo = (throttle15bit & 0xFF).toRadixString(16).padLeft(2, '0');
+      String tHi = ((throttle15bit >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
+      String flagsHex = flags.toRadixString(16).padLeft(2, '0');
+      String seqHex = seq.toRadixString(16).padLeft(2, '0');
+      String adcLo = tLo; // raw_adc mirrors filtered for sim
+      String adcHi = tHi;
+      _parseCandumpLine("can0 110#$tLo$tHi$flagsHex$seqHex$adcLo$adcHi");
 
       if (braking) {
         state.updateStrategy("REGEN");
