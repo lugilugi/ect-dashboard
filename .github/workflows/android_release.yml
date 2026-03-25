@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to create a Release
     
     steps:
       - name: Checkout repository
@@ -37,3 +39,9 @@ jobs:
         with:
           name: ect-dashboard-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
