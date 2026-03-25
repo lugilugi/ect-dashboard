@@ -1,9 +1,10 @@
 name: Android Release Build
 
 on:
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
   push:
     tags:
-      - 'v*'
+      - '*' # Trigger on ANY pushed tag (e.g., v1.0, 1.0, release)
 
 jobs:
   build:
