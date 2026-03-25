@@ -64,12 +64,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           Row(
             children: [
-              _buildIndicator(Icons.keyboard_arrow_left, state.leftTurn, Colors.greenAccent),
-              _buildIndicator(Icons.lightbulb, state.headlights, Colors.blueAccent),
-              _buildIndicator(Icons.waves, state.wipers, Colors.cyan),
-              _buildIndicator(Icons.volume_up, state.horn, Colors.orangeAccent),
-              _buildIndicator(Icons.warning, state.hazards, Colors.redAccent),
-              _buildIndicator(Icons.keyboard_arrow_right, state.rightTurn, Colors.greenAccent),
+              _buildIndicator(Icons.keyboard_arrow_left, state.leftTurn, Colors.greenAccent, onTap: () => state.sendUsbCommand("CMD:LEFT_TURN\n")),
+              _buildIndicator(Icons.lightbulb, state.headlights, Colors.blueAccent, onTap: () => state.sendUsbCommand("CMD:HEADLIGHTS\n")),
+              _buildIndicator(Icons.waves, state.wipers, Colors.cyan, onTap: () => state.sendUsbCommand("CMD:WIPERS\n")),
+              _buildIndicator(Icons.volume_up, state.horn, Colors.orangeAccent, onTap: () => state.sendUsbCommand("CMD:HORN\n")),
+              _buildIndicator(Icons.warning, state.hazards, Colors.redAccent, onTap: () => state.sendUsbCommand("CMD:HAZARDS\n")),
+              _buildIndicator(Icons.keyboard_arrow_right, state.rightTurn, Colors.greenAccent, onTap: () => state.sendUsbCommand("CMD:RIGHT_TURN\n")),
             ],
           ),
           Padding(
@@ -102,6 +102,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(width: 24),
                 
+                // SIM Status
+                Icon(Icons.memory, color: state.isSimulated ? Colors.amberAccent : Colors.white24, size: 10),
+                const SizedBox(width: 4),
+                Text("SIM", style: TextStyle(color: state.isSimulated ? Colors.amberAccent : Colors.white24, fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(width: 16),
+                
                 // USB Status
                 Icon(Icons.circle, color: state.isConnected ? Colors.greenAccent : Colors.redAccent, size: 10),
                 const SizedBox(width: 4),
@@ -120,15 +126,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildIndicator(IconData icon, bool active, Color color) {
-    return Container(
-      width: 48,
-      height: double.infinity,
-      decoration: BoxDecoration(
-        color: active ? color : Colors.transparent,
-        border: const Border(right: BorderSide(color: Colors.white24, width: 1)),
+  Widget _buildIndicator(IconData icon, bool active, Color color, {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        width: 48,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          color: active ? color : Colors.transparent,
+          border: const Border(right: BorderSide(color: Colors.white24, width: 1)),
+        ),
+        child: Icon(icon, color: active ? Colors.black : Colors.white24, size: 24),
       ),
-      child: Icon(icon, color: active ? Colors.black : Colors.white24, size: 24),
     );
   }
 }
@@ -148,9 +157,13 @@ class _EfficiencyGrid extends StatelessWidget {
     Color powerColor = Colors.white;
     if (powerW < 0) {
       powerColor = Colors.cyanAccent;
-    } else if (powerW > 3000) powerColor = Colors.red;
-    else if (powerW > 2000) powerColor = Colors.redAccent;
-    else if (powerW > 1000) powerColor = Colors.orangeAccent;
+    } else if (powerW > 3000) {
+      powerColor = Colors.red;
+    } else if (powerW > 2000) {
+      powerColor = Colors.redAccent;
+    } else if (powerW > 1000) {
+      powerColor = Colors.orangeAccent;
+    }
 
     Color instEffColor = state.strategy == "REGEN" ? Colors.cyanAccent : Colors.white;
 
@@ -159,9 +172,6 @@ class _EfficiencyGrid extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // FULL WIDTH MASTER THROTTLE BAR
-          _buildGridThrottleBar(),
-
           // 3-COLUMN DATA GRID
           Expanded(
             child: Row(
@@ -173,7 +183,6 @@ class _EfficiencyGrid extends StatelessWidget {
                   child: Column(
                     children: [
                       Expanded(child: _buildSplitCell("VOLTAGE / CURRENT", state.mainVoltage.toStringAsFixed(1), "V", state.current780.toStringAsFixed(1), "A", bottomBorder: true, rightBorder: true, color1: Colors.yellowAccent, color2: Colors.cyanAccent)),
-                      Expanded(child: _buildGridCell("NODE FAULT CODES", state.lastErrorCode, "", bottomBorder: true, rightBorder: true, valueColor: state.lastErrorCode == "OK" ? Colors.greenAccent : Colors.redAccent)),
                       Expanded(child: _buildGridCell("POWER", powerW.toStringAsFixed(0), "W", bottomBorder: true, rightBorder: true, valueColor: powerColor)),
                       Expanded(child: _buildSplitCell("M.C. TEMP / BATT TEMP", state.mcTempC.toStringAsFixed(0), "°C", state.battTempC.toStringAsFixed(0), "°C", bottomBorder: false, rightBorder: true, color1: state.mcTempC > 80 ? Colors.redAccent : Colors.orangeAccent, color2: state.battTempC > 50 ? Colors.redAccent : Colors.deepOrangeAccent)),
                     ],
@@ -185,6 +194,7 @@ class _EfficiencyGrid extends StatelessWidget {
                   flex: 5,
                   child: Column(
                     children: [
+                      _buildGridThrottleBar(),
                       Expanded(
                         flex: 5,
                         child: Container(
@@ -206,9 +216,8 @@ class _EfficiencyGrid extends StatelessWidget {
                   child: Column(
                     children: [
                       Expanded(child: _buildSplitCell("AVG EFF. / ENERGY", state.avgKmPerKwh.toStringAsFixed(2), "km/kWh", (state.energyJ780 / 3600.0).toStringAsFixed(1), "Wh", leftBorder: true, bottomBorder: true, color1: Colors.lightGreenAccent, color2: Colors.purpleAccent)),
-                      Expanded(child: _buildBlankCell(bottomBorder: true)),
-                      Expanded(child: _buildStrategyCell(bottomBorder: true)),
-                      Expanded(child: _buildBlankCell(bottomBorder: false)),
+                      Expanded(child: _buildGridCell("NODE FAULT CODES", state.lastErrorCode, "", bottomBorder: true, leftBorder: true, valueColor: state.lastErrorCode == "OK" ? Colors.greenAccent : Colors.redAccent)),
+                      Expanded(child: _buildStrategyCell(bottomBorder: false)),
                     ],
                   ),
                 ),
@@ -227,22 +236,28 @@ class _EfficiencyGrid extends StatelessWidget {
         Container(
           width: double.infinity,
           color: accentColor,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Text("INSTANT km/kWh", textAlign: TextAlign.center, style: TextStyle(color: accentColor == Colors.white ? Colors.black : Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text("INSTANT km/kWh", textAlign: TextAlign.center, style: TextStyle(color: accentColor == Colors.white ? Colors.black : Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
         ),
         Expanded(
           child: Center(
-            child: Text(
-              state.instKmPerKwh > 90.0 ? "MAX " : state.instKmPerKwh.toStringAsFixed(2),
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontFeatures: const [FontFeature.tabularFigures()],
-                fontSize: 100, 
-                color: accentColor, 
-                fontWeight: FontWeight.bold, 
-                height: 1.0, 
-                letterSpacing: -2,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                state.instKmPerKwh > 90.0 ? "MAX " : state.instKmPerKwh.toStringAsFixed(2),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  fontSize: 100, 
+                  color: accentColor, 
+                  fontWeight: FontWeight.bold, 
+                  height: 1.0, 
+                  letterSpacing: -2,
+                ),
               ),
             ),
           ),
@@ -261,7 +276,7 @@ class _EfficiencyGrid extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             decoration: BoxDecoration(color: state.isBrakePressed ? Colors.redAccent : Colors.transparent),
             alignment: Alignment.center,
-            child: Text(state.isBrakePressed ? "BRK " : "THR ", style: TextStyle(color: state.isBrakePressed ? Colors.black : Colors.white54, fontWeight: FontWeight.bold, fontSize: 18)),
+            child: Text(state.isBrakePressed ? "BRK " : "THR ", style: TextStyle(color: state.isBrakePressed ? Colors.black : Colors.white54, fontWeight: FontWeight.bold, fontSize: 14)),
           ),
           Container(width: 1, color: Colors.white24),
           Expanded(
@@ -273,7 +288,7 @@ class _EfficiencyGrid extends StatelessWidget {
                   child: Container(
                     decoration: BoxDecoration(
                       color: state.throttlePercent > 85 ? Colors.orangeAccent : Colors.greenAccent,
-                      boxShadow: [BoxShadow(color: (state.throttlePercent > 85 ? Colors.orangeAccent : Colors.greenAccent).withOpacity(0.6), blurRadius: 15)],
+                      boxShadow: [BoxShadow(color: (state.throttlePercent > 85 ? Colors.orangeAccent : Colors.greenAccent).withValues(alpha: 0.6), blurRadius: 15)],
                     ),
                   ),
                 ),
@@ -287,7 +302,7 @@ class _EfficiencyGrid extends StatelessWidget {
             padding: const EdgeInsets.only(right: 16),
             child: Text(
               "${state.throttlePercent.toStringAsFixed(0)}%",
-              style: const TextStyle(fontFamily: 'monospace', fontFeatures: [FontFeature.tabularFigures()], color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 22),
+              style: const TextStyle(fontFamily: 'monospace', fontFeatures: [FontFeature.tabularFigures()], color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16),
             ),
           )
         ],
@@ -313,8 +328,12 @@ class _EfficiencyGrid extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 8, top: 6),
-            child: Text(mainTitle, style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(mainTitle, style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+            ),
           ),
           Expanded(
             child: Row(
@@ -323,28 +342,36 @@ class _EfficiencyGrid extends StatelessWidget {
               children: [
                 Expanded(
                   child: Center(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.baseline,
-                      textBaseline: TextBaseline.alphabetic,
-                      children: [
-                        Text(val1, style: TextStyle(fontFamily: 'monospace', fontFeatures: const [FontFeature.tabularFigures()], color: color1, fontSize: 42, fontWeight: FontWeight.bold, height: 1.0)),
-                        if (unit1.isNotEmpty) Padding(padding: const EdgeInsets.only(left: 4.0), child: Text(unit1, style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold))),
-                      ],
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6.0),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(val1, style: TextStyle(fontFamily: 'monospace', fontFeatures: const [FontFeature.tabularFigures()], color: color1, fontSize: 42, fontWeight: FontWeight.bold, height: 1.0)),
+                            if (unit1.isNotEmpty) Text(unit1, style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
                 Container(width: 1, color: Colors.white24, height: 40),
                 Expanded(
                   child: Center(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.baseline,
-                      textBaseline: TextBaseline.alphabetic,
-                      children: [
-                        Text(val2, style: TextStyle(fontFamily: 'monospace', fontFeatures: const [FontFeature.tabularFigures()], color: color2, fontSize: 42, fontWeight: FontWeight.bold, height: 1.0)),
-                        if (unit2.isNotEmpty) Padding(padding: const EdgeInsets.only(left: 4.0), child: Text(unit2, style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold))),
-                      ],
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6.0),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(val2, style: TextStyle(fontFamily: 'monospace', fontFeatures: const [FontFeature.tabularFigures()], color: color2, fontSize: 42, fontWeight: FontWeight.bold, height: 1.0)),
+                            if (unit2.isNotEmpty) Text(unit2, style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -375,8 +402,12 @@ class _EfficiencyGrid extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 8, top: 6),
-            child: Text("STRATEGY TARGET", style: TextStyle(color: Colors.black.withOpacity(0.6), fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text("STRATEGY TARGET", style: TextStyle(color: Colors.black.withValues(alpha: 0.6), fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+            ),
           ),
           Expanded(
             child: Center(
@@ -415,36 +446,39 @@ class _EfficiencyGrid extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 8, top: 6),
-            child: Text(title, style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(title, style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+            ),
           ),
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Expanded(
-                  child: Text(
-                    value,
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                       fontFamily: 'monospace',
-                       fontFeatures: const [FontFeature.tabularFigures()],
-                       color: valueColor, 
-                       fontSize: 56, 
-                       fontWeight: FontWeight.bold, 
-                       height: 1.0
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      value,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                         fontFamily: 'monospace',
+                         fontFeatures: const [FontFeature.tabularFigures()],
+                         color: valueColor, 
+                         fontSize: 56, 
+                         fontWeight: FontWeight.bold, 
+                         height: 1.0
+                      ),
                     ),
-                  ),
+                    if (unit.isNotEmpty) Text(unit, textAlign: TextAlign.right, style: const TextStyle(color: Colors.white54, fontSize: 16, fontWeight: FontWeight.bold)),
+                  ],
                 ),
-                SizedBox(
-                  width: 50, 
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 6.0),
-                    child: Text(unit, style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ],
@@ -452,16 +486,7 @@ class _EfficiencyGrid extends StatelessWidget {
     );
   }
 
-  Widget _buildBlankCell({bool bottomBorder = true}) {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-           left: const BorderSide(color: Colors.white24, width: 1),
-           bottom: bottomBorder ? const BorderSide(color: Colors.white24, width: 1) : BorderSide.none,
-        ),
-      ),
-    );
-  }
+
 
   Widget _buildBottomCenterMetrics(DashboardState state) {
     return Row(
@@ -474,22 +499,27 @@ class _EfficiencyGrid extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Padding(
-                padding: EdgeInsets.only(left: 8, top: 6),
-                child: Text("SPEED", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                padding: EdgeInsets.only(left: 8, top: 6, right: 8),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text("SPEED", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                ),
               ),
               Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      state.speedKmh.toStringAsFixed(1).padLeft(4, '0'),
-                      style: const TextStyle(fontFamily: 'monospace', fontFeatures: [FontFeature.tabularFigures()], color: Colors.cyanAccent, fontSize: 62, fontWeight: FontWeight.bold, height: 1.0),
-                    ),
-                    const SizedBox(width: 6),
-                    const Text("km/h", style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
-                  ],
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        state.speedKmh.toStringAsFixed(1).padLeft(4, '0'),
+                        style: const TextStyle(fontFamily: 'monospace', fontFeatures: [FontFeature.tabularFigures()], color: Colors.cyanAccent, fontSize: 62, fontWeight: FontWeight.bold, height: 1.0),
+                      ),
+                      const SizedBox(height: 2),
+                      const Text("km/h", style: TextStyle(color: Colors.white54, fontSize: 16, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -746,6 +776,18 @@ class _ConfigView extends StatelessWidget {
             child: _buildPanel("SOFTWARE CONFIGURATION", Column(
                crossAxisAlignment: CrossAxisAlignment.start,
                children: [
+                 Row(
+                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                   children: [
+                     const Text("ENABLE MOCK SIMULATION (DEMO/TESTING)", style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, fontSize: 10)),
+                     Switch(
+                       value: state.enableSimulation,
+                       activeThumbColor: Colors.amberAccent,
+                       onChanged: (val) => state.toggleSimulation(val),
+                     )
+                   ],
+                 ),
+                 const SizedBox(height: 16),
                  const Text("API SERVER ENDPOINT URL", style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, fontSize: 10)),
                  const SizedBox(height: 8),
                  TextFormField(

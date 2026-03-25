@@ -26,6 +26,14 @@ class UsbService {
 
   UsbService(this.state);
 
+  void sendString(String data) {
+    if (_port != null) {
+      _port!.write(Uint8List.fromList(data.codeUnits));
+    } else if (state.isSimulated) {
+      debugPrint("SIMULATED TX: $data");
+    }
+  }
+
   void start() {
     _connect();
     _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -54,7 +62,13 @@ class UsbService {
     }
     
     if (devices.isEmpty) {
-      _startMockSimulation();
+      if (state.enableSimulation) {
+        _startMockSimulation();
+      } else {
+        _mockTimer?.cancel();
+        _mockTimer = null;
+        state.isSimulated = false;
+      }
       return;
     }
 
@@ -101,7 +115,7 @@ class UsbService {
 
   void _startMockSimulation() {
     if (_mockTimer != null) return;
-    state.setConnectionState(true); 
+    state.isSimulated = true;
     final startTime = DateTime.now().millisecondsSinceEpoch / 1000.0;
     
     _mockTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
@@ -237,6 +251,10 @@ class UsbService {
         break;
       case CanMsgID.pwrEnergy:
         state.updateEnergy(EnergyPayload.fromBytes(payloadBytes));
+        break;
+      case CanMsgID.hallStat:
+        final hall = HallPayload.fromBytes(payloadBytes);
+        state.updateMotion(hall.speed, hall.totalDist, state.lapNumber); // Preserve current lap
         break;
     }
   }

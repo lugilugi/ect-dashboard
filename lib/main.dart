@@ -9,6 +9,7 @@ import 'ui/dashboard_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
@@ -39,6 +40,7 @@ class _TelemetryAppState extends State<TelemetryApp> {
     // Initialize USB Service and start listening
     final state = Provider.of<DashboardState>(context, listen: false);
     _usbService = UsbService(state);
+    state.onUsbTx = _usbService.sendString;
     _usbService.start();
     
     // Initialize API Service
@@ -57,6 +59,12 @@ class _TelemetryAppState extends State<TelemetryApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Telemetry Dashboard',
+      builder: (context, child) {
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.0)),
+          child: child!,
+        );
+      },
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF121212),

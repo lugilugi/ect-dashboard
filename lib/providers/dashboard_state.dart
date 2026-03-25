@@ -31,6 +31,8 @@ class DashboardState extends ChangeNotifier {
   // Connections
   bool isConnected = false;
   bool isServerConnected = false;
+  bool enableSimulation = false;
+  bool isSimulated = false;
 
   // EV Metrics
   double speedKmh = 0.0;
@@ -60,6 +62,12 @@ class DashboardState extends ChangeNotifier {
   // Configuration
   String apiUrl = "https://your-backend-api.local/api/telemetry";
   List<double> throttleMap = [0.0, 25.0, 50.0, 75.0, 100.0];
+
+  void Function(String)? onUsbTx;
+
+  void sendUsbCommand(String cmd) {
+    onUsbTx?.call(cmd);
+  }
 
   // Session timer
   int sessionTimeSeconds = 0;
@@ -94,7 +102,15 @@ class DashboardState extends ChangeNotifier {
   }
 
   void setConnectionState(bool state) {
-    isConnected = state;
+    if (isConnected != state) {
+      isConnected = state;
+      notifyListeners();
+    }
+  }
+
+  void toggleSimulation(bool val) {
+    enableSimulation = val;
+    if (!val) isSimulated = false;
     notifyListeners();
   }
 

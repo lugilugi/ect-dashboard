@@ -8,6 +8,7 @@ class CanMsgID {
   static const int pwrMonitor740 = 0x311;
   static const int pwrEnergy = 0x312;
   static const int dashStat = 0x400;
+  static const int hallStat = 0x500; // Reserved for the new HallPayload
 }
 
 class PedalPayload {
@@ -17,11 +18,17 @@ class PedalPayload {
   PedalPayload({required this.throttlePercent, required this.isBrakePressed});
 
   factory PedalPayload.fromBytes(Uint8List bytes) {
-    if (bytes.isEmpty) return PedalPayload(throttlePercent: 0, isBrakePressed: false);
-    final rawData = bytes[0];
-    // throttle computation: (rawData >> 1) * (100/127) => ~0.7874
-    final throttle = (rawData >> 1) * 0.7874;
-    final brake = (rawData & 0x01) == 1;
+    if (bytes.length < 6) return PedalPayload(throttlePercent: 0, isBrakePressed: false);
+    
+    final bd = ByteData.sublistView(bytes);
+    final filteredThrottle = bd.getUint16(0, Endian.little);
+    final flags = bytes[2];
+    
+    // (filtered_throttle & 0x7FFF) * (100.0f / 32767.0f)
+    final throttle = (filteredThrottle & 0x7FFF) * (100.0 / 32767.0);
+    // brake_active is bit 2 (0x04)
+    final brake = (flags & 0x04) != 0;
+    
     return PedalPayload(throttlePercent: throttle, isBrakePressed: brake);
   }
 }
@@ -111,6 +118,26 @@ class EnergyPayload {
     return EnergyPayload(
       joules780: rawVal * eScale780,
       joules740: rawVal * eScale740,
+    );
+  }
+}
+
+class HallPayload {
+  final double speed;
+  final double totalDist;
+
+  HallPayload({required this.speed, required this.totalDist});
+
+  factory HallPayload.fromBytes(Uint8List bytes) {
+    if (bytes.length < 8) return HallPayload(speed: 0, totalDist: 0);
+    final bd = ByteData.sublistView(bytes);
+    
+    final rawSpeed = bd.getUint32(0, Endian.little);
+    final rawDist = bd.getUint32(4, Endian.little);
+
+    return HallPayload(
+      speed: rawSpeed / 1000.0,
+      totalDist: rawDist / 1000.0,
     );
   }
 }
