@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:telemetry_dashboard/services/mqtt_service.dart';
 import 'package:usb_serial/transaction.dart';
 import 'package:usb_serial/usb_serial.dart';
 import '../providers/dashboard_state.dart';
@@ -28,7 +29,9 @@ class UsbService {
   double _mockMcTemp = 40.0;
   double _mockBattTemp = 35.0;
 
-  UsbService(this.state);
+  final MqttService mqttService;
+
+  UsbService(this.state, this.mqttService);
 
   void sendString(String data) {
     if (_port != null) {
@@ -130,90 +133,69 @@ class UsbService {
     _mockTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       double t = (DateTime.now().millisecondsSinceEpoch / 1000.0) - startTime;
       
+      // 1. INPUT LOGIC
       int throttle = ((sin(t / 2) + 1.2) * 40).toInt().clamp(0, 100); 
       bool braking = (t % 8 > 6);
-      if (braking) { throttle = 0; }
+      if (braking) throttle = 0;
 
-      // Build proper 6-byte PedalPayload: [filtered_throttle:u16LE] [flags:u8] [seq:u8] [raw_adc:u16LE]
+      // --- SEND PEDAL (0x110) ---
       int throttle15bit = ((throttle / 100.0) * 32767).toInt().clamp(0, 32767);
-      int flags = braking ? 0x04 : 0x00; // bit 2 = brake_active
-      int seq = (t * 10).toInt() & 0xFF;
-      String tLo = (throttle15bit & 0xFF).toRadixString(16).padLeft(2, '0');
-      String tHi = ((throttle15bit >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
-      String flagsHex = flags.toRadixString(16).padLeft(2, '0');
-      String seqHex = seq.toRadixString(16).padLeft(2, '0');
-      String adcLo = tLo; // raw_adc mirrors filtered for sim
-      String adcHi = tHi;
-      _parseCandumpLine("can0 110#$tLo$tHi$flagsHex$seqHex$adcLo$adcHi");
+      int flags = braking ? 0x04 : 0x00;
+      String tHex = throttle15bit.toRadixString(16).padLeft(4, '0');
+      String tLe = tHex.substring(2, 4) + tHex.substring(0, 2);
+      String fHex = flags.toRadixString(16).padLeft(2, '0');
+      _parseCandumpLine("can0 110#${tLe}${fHex}000000"); // seq and raw_adc as 00
 
-      if (braking) {
-        state.updateStrategy("REGEN");
-      } else if (throttle == 0) {
-        state.updateStrategy("COAST");
-      } else if (throttle > 80) {
-        state.updateStrategy("BURN");
-      } else {
-        state.updateStrategy("PACE");
-      }
-
+      // 2. PHYSICS ENGINE
       if (braking) {
         _mockSpeedKmh -= 4.0;
         if (_mockSpeedKmh < 0) _mockSpeedKmh = 0;
         _mockMcTemp -= 0.1;
-        _mockBattTemp += 0.05; // Regen heats battery
       } else {
         _mockSpeedKmh += (throttle / 100.0) * 1.5; 
         if (_mockSpeedKmh > 160) _mockSpeedKmh = 160;
         _mockMcTemp += (throttle / 100.0) * 0.15;
-        _mockBattTemp += (throttle / 100.0) * 0.02;
       }
-      
-      if (_mockMcTemp > 90.0) _mockMcTemp -= 0.5; 
-      if (_mockBattTemp > 60.0) _mockBattTemp -= 0.1;
-
-      // Random error generation
-      if (t.toInt() % 45 == 0 && t > 10) {
-        state.updateErrorCode("ERR 0x${(t.toInt()%255).toRadixString(16).toUpperCase()}");
-      } else {
-        state.updateErrorCode("OK");
-      }
-      
       _mockDistanceKm += _mockSpeedKmh * (0.1 / 3600.0);
-      int lap = (_mockDistanceKm / 4.0).floor() + 1;
-      
-      state.updateMotion(_mockSpeedKmh, _mockDistanceKm, lap);
-      state.updateThermals(_mockMcTemp, _mockBattTemp);
 
-      // Engineer mock parameters
-      List<double> cells = List.generate(24, (index) => 3.8 + (sin((t + index) * 2) * 0.05));
-      double bus12 = 12.4 - (throttle * 0.01);
-      state.updateEngineerMock(cells, bus12, t > 3 ? 8 : 0, t > 3);
+      // --- SEND SPEED/MOTION (0x500) ---
+      int rawSpeed = (_mockSpeedKmh * 1000).toInt();
+      int rawDist = (_mockDistanceKm * 1000).toInt();
+      String sLe = _to32BitLeHex(rawSpeed);
+      String dLe = _to32BitLeHex(rawDist);
+      _parseCandumpLine("can0 500#$sLe$dLe");
 
-      // Power
+      // 3. ELECTRICAL ENGINE
       double volts = 72.0 - (throttle * 0.04);
       double amps = braking ? -30.0 : throttle * 2.2; 
-      int voltsRaw = (volts / 0.003125).toInt();
-      int ampsRaw = (amps / 0.0024).toInt();
       
-      String vHex = voltsRaw.toRadixString(16).padLeft(4, '0');
-      String vLe = vHex.substring(2, 4) + vHex.substring(0, 2);
-      
-      String aHex = (ampsRaw & 0xFFFF).toRadixString(16).padLeft(4, '0');
-      String aLe = aHex.substring(2, 4) + aHex.substring(0, 2);
-      
-      _parseCandumpLine("can0 310#$vLe$aLe");
+      // --- SEND POWER (0x310) ---
+      int vRaw = (volts / 0.003125).toInt();
+      int aRaw = (amps / 0.0024).toInt();
+      String vLe = (vRaw & 0xFFFF).toRadixString(16).padLeft(4, '0').split('').reversed.join(''); // Simple flip helper
+      // Using proper LE packing
+      String pVle = (vRaw & 0xFF).toRadixString(16).padLeft(2, '0') + ((vRaw >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
+      String pAle = (aRaw & 0xFF).toRadixString(16).padLeft(2, '0') + ((aRaw >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
+      _parseCandumpLine("can0 310#$pVle$pAle");
 
+      // --- SEND ENERGY (0x312) ---
       _mockEnergyJ780 += (volts * amps) * 0.1;
-      state.energyJ780 = _mockEnergyJ780;
-      state.energyJ740 = _mockEnergyJ780 * 0.05; 
+      int eRaw = (_mockEnergyJ780 / 0.00768).toInt();
+      // Pack 40-bit Energy (5 bytes)
+      String eLe = "";
+      for(int i=0; i<5; i++) { eLe += ((eRaw >> (i*8)) & 0xFF).toRadixString(16).padLeft(2, '0'); }
+      _parseCandumpLine("can0 312#$eLe");
 
-      // Aux (0x210)
-      int leftTurn = ((t * 2).toInt() % 2 == 0) ? 1 : 0;
-      int wipersOn = ((t * 4).toInt() % 8 < 2) ? 1 : 0; 
-      int auxRaw = leftTurn | 0x08 | (wipersOn << 6); 
-      _parseCandumpLine("can0 210#${auxRaw.toRadixString(16).padLeft(2, '0')}");
+      // 4. UI STATE UPDATES (Keep these for the phone screen)
+      state.updateMotion(_mockSpeedKmh, _mockDistanceKm, (_mockDistanceKm / 4.0).floor() + 1);
+      state.updateThermals(_mockMcTemp, _mockBattTemp);
     });
   }
+
+  String _to32BitLeHex(int value) {
+  Uint8List b = Uint8List(4)..buffer.asByteData().setUint32(0, value, Endian.little);
+  return b.map((e) => e.toRadixString(16).padLeft(2, '0')).join('');
+}
 
   void _processBytes(Uint8List newBytes) {
     String chunk = String.fromCharCodes(newBytes);
@@ -257,21 +239,43 @@ class UsbService {
   void _dispatchPayload(int id, Uint8List payloadBytes) {
     switch (id) {
       case CanMsgID.pedal:
-        state.updatePedal(PedalPayload.fromBytes(payloadBytes));
+        final pedal = PedalPayload.fromBytes(payloadBytes);
+        state.updatePedal(pedal);
+        
+        // Instantly publish to the cloud!
+        mqttService.publish("Throttle_Percent", pedal.throttlePercent);
+        mqttService.publish("Brake_Active", pedal.isBrakePressed ? 1.0 : 0.0);
         break;
+        
       case CanMsgID.auxCtrl:
         state.updateAux(AuxControlPayload.fromBytes(payloadBytes));
         break;
+        
       case CanMsgID.pwrMonitor780:
       case CanMsgID.pwrMonitor740:
-        state.updatePower(PowerPayload.fromBytes(payloadBytes), id);
+        final power = PowerPayload.fromBytes(payloadBytes);
+        state.updatePower(power, id);
+        
+        // We separate 780 and 740 metrics for Grafana
+        String suffix = (id == CanMsgID.pwrMonitor780) ? "_780" : "_740";
+        mqttService.publish("Voltage$suffix", power.voltage);
+        mqttService.publish("Current$suffix", power.current780); 
         break;
+        
       case CanMsgID.pwrEnergy:
-        state.updateEnergy(EnergyPayload.fromBytes(payloadBytes));
+        final energy = EnergyPayload.fromBytes(payloadBytes);
+        state.updateEnergy(energy);
+        
+        mqttService.publish("Joules_780", energy.joules780);
+        mqttService.publish("Joules_740", energy.joules740);
         break;
+        
       case CanMsgID.hallStat:
         final hall = HallPayload.fromBytes(payloadBytes);
-        state.updateMotion(hall.speed, hall.totalDist, state.lapNumber); // Preserve current lap
+        state.updateMotion(hall.speed, hall.totalDist, state.lapNumber);
+        
+        mqttService.publish("Speed_Kmh", hall.speed);
+        mqttService.publish("Distance_Km", hall.totalDist);
         break;
     }
   }

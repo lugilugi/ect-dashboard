@@ -2,8 +2,56 @@ import 'package:flutter/material.dart';
 import 'dart:collection';
 import 'dart:async';
 import '../models/can_messages.dart';
+import 'package:uuid/uuid.dart';
+import 'package:intl/intl.dart';
+
+enum MqttStatus { disconnected, connecting, connected }
 
 class DashboardState extends ChangeNotifier {
+  MqttStatus _mqttStatus = MqttStatus.disconnected;
+  MqttStatus get mqttStatus => _mqttStatus;
+
+  String _sessionName = "";
+  String _sessionId = "";
+  bool _isLogging = false;
+
+  bool get isLogging => _isLogging;
+  String get sessionName => _sessionName;
+  String get sessionId => _sessionId;
+
+  String _mqttHost = "pitwall-laptop"; // Default value
+  String get mqttHost => _mqttHost;
+
+  void updateMqttHost(String newHost) {
+    if (_mqttHost == newHost) return;
+    _mqttHost = newHost;
+    notifyListeners();
+  }
+  void setMqttStatus(MqttStatus status) {
+    _mqttStatus = status;
+    notifyListeners();
+  }
+
+  // GENERATE NAME (e.g., RUN_20260327_1430)
+  String generateDefaultName() {
+    final now = DateTime.now();
+    return "RUN_${DateFormat('yyyyMMdd_HHmm').format(now)}";
+  }
+
+  // START SESSION
+  void startSession(String name) {
+    _sessionId = const Uuid().v4(); // Unique ID for PostgreSQL
+    _sessionName = name.isEmpty ? generateDefaultName() : name;
+    _isLogging = true;
+    notifyListeners();
+  }
+
+  // STOP SESSION
+  void stopSession() {
+    _isLogging = false;
+    notifyListeners();
+  }
+
   // Pedal states
   double throttlePercent = 0.0;
   bool isBrakePressed = false;

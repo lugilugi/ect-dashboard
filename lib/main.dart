@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'providers/dashboard_state.dart';
 import 'services/usb_service.dart';
-import 'services/api_service.dart';
+import 'services/mqtt_service.dart';
 import 'ui/dashboard_screen.dart';
 
 void main() {
@@ -32,25 +32,27 @@ class TelemetryApp extends StatefulWidget {
 
 class _TelemetryAppState extends State<TelemetryApp> {
   late UsbService _usbService;
-  late ApiService _apiService;
+  late MqttService _mqttService;
 
   @override
   void initState() {
     super.initState();
+    
     // Initialize USB Service and start listening
     final state = Provider.of<DashboardState>(context, listen: false);
-    _usbService = UsbService(state);
+    
+    _mqttService = MqttService(state);
+    _mqttService.start();
+    
+    _usbService = UsbService(state, _mqttService);
     state.onUsbTx = _usbService.sendString;
     _usbService.start();
-    
-    // Initialize API Service
-    _apiService = ApiService(state);
-    _apiService.start();
+  
   }
 
   @override
   void dispose() {
-    _apiService.stop();
+    _mqttService.stop();
     _usbService.stop();
     super.dispose();
   }

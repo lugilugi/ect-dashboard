@@ -46,6 +46,109 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final PageController _pageController = PageController();
+  
+void _handleStartStop(BuildContext context, DashboardState state) {
+  final p = _Palette(state.useLightTheme);
+    if (state.isLogging) {
+      state.stopSession();
+    } else {
+      final nameController = TextEditingController(text: state.generateDefaultName());
+      // Create a controller for the host address
+      final hostController = TextEditingController(text: state.mqttHost);
+
+      showDialog(
+        context: context,
+        barrierDismissible: false, // Force a decision
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF121212),
+          title: Row(
+            children: [
+              Icon(Icons.cell_tower, color: p.cyan, size: 20),
+              const SizedBox(width: 10),
+              const Text("SESSION CONFIG", 
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // RUN NAME INPUT
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                style: TextStyle(color: p.cyan, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  labelText: "RUN NAME",
+                  labelStyle: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2),
+                  enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: p.border)),
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // MQTT DESTINATION INPUT (The Safeguard)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.03),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("TARGET DESTINATION (MQTT HOST)", 
+                      style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold)),
+                    TextField(
+                      controller: hostController,
+                      style: const TextStyle(color: Colors.white70, fontFamily: 'monospace', fontSize: 13),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: "e.g. 100.x.x.x or pitwall-laptop",
+                        hintStyle: TextStyle(color: Colors.white10),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context), 
+              child: const Text("CANCEL", style: TextStyle(color: Colors.white30))
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: p.green.withOpacity(0.8),
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+              ),
+              onPressed: () {
+                // 1. Update the host in state first
+                state.updateMqttHost(hostController.text);
+                // 2. Start the session with the provided name
+                state.startSession(nameController.text);
+                Navigator.pop(context);
+              },
+              child: const Text("CONFIRM & START", style: TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  // Helper for the small technical rows in the dialog
+  Widget _buildDialogInfoRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white24, fontSize: 9, fontWeight: FontWeight.bold)),
+        Text(value, style: const TextStyle(color: Colors.white54, fontSize: 9, fontFamily: 'monospace')),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -112,7 +215,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () => state.sendUsbCommand("CMD:HEADLIGHTS\n"),
               ),
               _buildIndicator(
-                Icons.waves,
+                Icons.local_car_wash,
                 state.wipers,
                 p.cyan,
                 p,
@@ -179,6 +282,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 const SizedBox(width: 16),
+// THE NEW START/STOP BUTTON
+                GestureDetector(
+                  onTap: () => _handleStartStop(context, state),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      // Glowing green when idle, solid red when recording
+                      color: state.isLogging ? p.red.withOpacity(0.2) : p.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: state.isLogging ? p.red : p.green, 
+                        width: 1.5
+                      ),
+                      boxShadow: [
+                        if (state.isLogging)
+                          BoxShadow(color: p.red.withOpacity(0.4), blurRadius: 8, spreadRadius: 1),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          state.isLogging ? Icons.stop : Icons.play_arrow,
+                          color: state.isLogging ? p.red : p.green,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          state.isLogging ? "STOP" : "START",
+                          style: TextStyle(
+                            color: state.isLogging ? p.red : p.green,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
                 Text(
                   "LOCAL ",
                   style: TextStyle(
@@ -193,7 +338,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     color: p.amber,
                     fontFamily: 'monospace',
                     fontFeatures: const [FontFeature.tabularFigures()],
-                    fontSize: 22,
+                    fontSize: 14,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -229,13 +374,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(width: 16),
                 Icon(
-                  Icons.cloud_circle,
+                  Icons.sensors, // Changed from cloud_circle to sensors
                   color: state.isServerConnected ? p.cyan : p.red,
                   size: 10,
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  "API",
+                  state.isServerConnected ? "ONLINE" : "OFFLINE",
                   style: TextStyle(
                     color: state.isServerConnected ? p.cyan : p.red,
                     fontSize: 12,
@@ -442,7 +587,7 @@ class _EfficiencyGrid extends StatelessWidget {
         Container(
           width: double.infinity,
           color: barColor,
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
           child: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
@@ -707,7 +852,7 @@ class _EfficiencyGrid extends StatelessWidget {
   // ---------------------------------------------------------------------------
   Widget _buildGridThrottleBar() {
     return Container(
-      height: 48,
+      height: 30,
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: p.border, width: 1)),
       ),
