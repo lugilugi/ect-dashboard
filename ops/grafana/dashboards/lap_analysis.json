@@ -1,0 +1,443 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT to_timestamp((ts_session_ms - MIN(ts_session_ms) OVER (PARTITION BY lap_number)) / 1000.0) AS \"time\", ('Lap ' || lap_number::text) AS metric, metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND lap_number IS NOT NULL ORDER BY lap_number, ts_session_ms;",
+          "refId": "A"
+        }
+      ],
+      "title": "Speed Overlay By Lap (Normalized)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT to_timestamp(ts_session_ms / 1000.0) AS \"time\", metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY ts_session_ms;",
+          "refId": "A"
+        }
+      ],
+      "title": "Selected Lap Speed Trace",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "kmh"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ROUND(AVG(metric_value)::numeric, 2) AS avg_speed_kmh FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND (${lap_number} = -1 OR lap_number = ${lap_number});",
+          "refId": "A"
+        }
+      ],
+      "title": "Average Speed",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "J"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ROUND(MAX(metric_value)::numeric, 2) AS max_energy_j FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key IN ('Joules_780', 'Joules_740') AND (${lap_number} = -1 OR lap_number = ${lap_number});",
+          "refId": "A"
+        }
+      ],
+      "title": "Peak Energy Metric",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT duration_ms FROM telemetry.laps WHERE session_id::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY lap_number DESC LIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Selected Lap Duration",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT lap_number, started_at_utc, ended_at_utc, duration_ms, crossing_valid, deadzone_ms, detection_method, detection_confidence FROM telemetry.laps WHERE session_id::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY lap_number;",
+          "refId": "A"
+        }
+      ],
+      "title": "Lap Metadata",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts_wall_utc, lap_number, event_type, reason, method, confidence, speed_kmh, heading_deg FROM telemetry.lap_events WHERE session_id::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY ts_wall_utc DESC LIMIT 200;",
+          "refId": "A"
+        }
+      ],
+      "title": "Lap Confidence / Crossing Events",
+      "type": "table"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "ect",
+    "telemetry",
+    "lap"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT session_id::text AS __value, COALESCE(session_name, session_id::text) || ' | ' || to_char(COALESCE(started_at_utc, created_at_utc), 'YYYY-MM-DD HH24:MI:SS') AS __text FROM telemetry.sessions ORDER BY COALESCE(started_at_utc, created_at_utc) DESC LIMIT 100;",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Session",
+        "multi": false,
+        "name": "session_id",
+        "options": [],
+        "query": "SELECT session_id::text AS __value, COALESCE(session_name, session_id::text) || ' | ' || to_char(COALESCE(started_at_utc, created_at_utc), 'YYYY-MM-DD HH24:MI:SS') AS __text FROM telemetry.sessions ORDER BY COALESCE(started_at_utc, created_at_utc) DESC LIMIT 100;",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "allValue": "-1",
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "-1"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT DISTINCT lap_number AS __value, ('Lap ' || lap_number::text) AS __text FROM telemetry.laps WHERE session_id::text = '${session_id}' ORDER BY lap_number;",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Lap",
+        "multi": false,
+        "name": "lap_number",
+        "options": [],
+        "query": "SELECT DISTINCT lap_number AS __value, ('Lap ' || lap_number::text) AS __text FROM telemetry.laps WHERE session_id::text = '${session_id}' ORDER BY lap_number;",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ECT Lap Analysis",
+  "uid": "ect-lap-analysis",
+  "version": 1,
+  "weekStart": ""
+}
