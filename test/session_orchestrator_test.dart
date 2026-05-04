@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/models/session_models.dart';
-import 'package:telemetry_dashboard/services/session_orchestrator.dart';
+import 'package:telemetry_dashboard/models/session/session_models.dart';
+import 'package:telemetry_dashboard/services/orchestration/session_orchestrator.dart';
 
 SessionControlState _baseControl({
   SessionState sessionState = SessionState.idle,

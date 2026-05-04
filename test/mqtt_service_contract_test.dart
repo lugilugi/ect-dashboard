@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/services/mqtt_payload_contract.dart';
-import 'package:telemetry_dashboard/services/mqtt_service.dart';
+import 'package:telemetry_dashboard/services/transport/mqtt_payload_contract.dart';
+import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
 
 void main() {
   group('MqttService canonical contract', () {

@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/services/local_spool_service.dart';
+import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
 
 void main() {
   group('LocalSpoolService (memory fallback)', () {
@@ -243,7 +243,7 @@ void main() {
       await spool.close();
     });
 
-    test('mirrors records into readable local session JSONL files', () async {
+    test('writes decoded telemetry into per-session CSV files', () async {
       final tempDir = await Directory.systemTemp.createTemp(
         'ect-readable-copy-test-',
       );
@@ -289,21 +289,17 @@ void main() {
         final files = await Directory(
           mirrorPath!,
         ).list(recursive: true).toList();
-        final jsonlFiles = files.whereType<File>().where((file) {
-          return file.path.toLowerCase().endsWith('.jsonl');
+        final csvFiles = files.whereType<File>().where((file) {
+          return file.path.toLowerCase().endsWith('.csv');
         }).toList();
 
-        expect(jsonlFiles.isNotEmpty, isTrue);
+        expect(csvFiles.isNotEmpty, isTrue);
 
-        var allContent = '';
-        for (final file in jsonlFiles) {
-          allContent += await file.readAsString();
-        }
+        final allContent = await csvFiles.first.readAsString();
 
         expect(allContent, contains('session-readable-1'));
-        expect(allContent, contains('enqueue_batch'));
-        expect(allContent, contains('enqueue_decoded_event'));
-        expect(allContent, contains('enqueue_raw_frame'));
+        expect(allContent, contains('metric_key'));
+        expect(allContent, contains('Speed_Kmh'));
 
         await spool.close();
       } finally {
@@ -345,10 +341,7 @@ void main() {
         expect(preview.directoryPath, tempDir.path);
         expect(preview.fileCount, greaterThan(0));
         expect(preview.recentLines.join('\n'), contains('session-preview-1'));
-        expect(
-          preview.recentLines.join('\n'),
-          contains('enqueue_decoded_event'),
-        );
+        expect(preview.recentLines.join('\n'), contains('Speed_Kmh'));
 
         await spool.close();
       } finally {
@@ -375,6 +368,11 @@ void main() {
           payloadJson: '{"metric":"Distance_Km","value":2.5}',
           sessionId: 'session-export-1',
         );
+        await spool.enqueueDecodedEvent(
+          sessionId: 'session-export-1',
+          seqInSession: 1,
+          eventJson: '{"metric_key":"Distance_Km","metric_value":2.5}',
+        );
 
         final exportPath = await spool.exportReadableCopy();
         expect(exportPath, isNotNull);
@@ -385,10 +383,15 @@ void main() {
         final exportedFiles = await exportDirectory
             .list(recursive: true)
             .toList();
-        final exportedJsonl = exportedFiles.whereType<File>().where((file) {
-          return file.path.toLowerCase().endsWith('.jsonl');
+        final exportedCsv = exportedFiles.whereType<File>().where((file) {
+          return file.path.toLowerCase().endsWith('.csv');
         }).toList();
-        expect(exportedJsonl.isNotEmpty, isTrue);
+        final exportedJsonl = exportedFiles.whereType<File>().where((file) {
+          return file.path.toLowerCase().endsWith('.jsonl') ||
+              file.path.toLowerCase().endsWith('.ndjson');
+        }).toList();
+        expect(exportedCsv.isNotEmpty, isTrue);
+        expect(exportedJsonl, isEmpty);
         expect(
           exportedFiles.any(
             (entity) => entity is File && entity.path.endsWith('manifest.txt'),

@@ -2,18 +2,165 @@ import 'package:flutter/material.dart';
 import 'dart:collection';
 import 'dart:async';
 import 'dart:math';
-import '../models/can_messages.dart';
-import '../models/session_models.dart';
-import '../models/driver_alert_models.dart';
-import '../models/tx_can_command.dart';
-import '../services/lap_boundary_service.dart';
-import '../services/can_tx_service.dart';
-import '../services/session_orchestrator.dart';
-import '../services/readable_local_copy_writer.dart';
+import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
+import 'package:telemetry_dashboard/models/session/session_models.dart';
+import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
+import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
+import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
+import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
+import 'package:telemetry_dashboard/services/orchestration/session_orchestrator.dart';
+import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
+import 'package:telemetry_dashboard/services/persistence/readable_local_copy_writer.dart';
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 
 enum MqttStatus { disconnected, connecting, connected }
+
+class _SessionTicker {
+  final SessionControlStore _sessionControl;
+  final VoidCallback _onTick;
+
+  Timer? _timer;
+
+  _SessionTicker({
+    required SessionControlStore sessionControl,
+    required VoidCallback onTick,
+  }) : _sessionControl = sessionControl,
+       _onTick = onTick;
+
+  void start() {
+    if (_timer != null) {
+      return;
+    }
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  void stop() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  void _tick() {
+    _sessionControl.advanceOneSecond();
+
+    _onTick();
+  }
+}
+
+class AlertStateStore {
+  bool alertAudioEnabled = true;
+  bool alertHapticsEnabled = true;
+  bool alertAdvisoryEnabled = true;
+  double alertVolume = 0.75;
+  int alertCooldownMs = 1500;
+  int alertCriticalRepeatCount = 2;
+  int alertCriticalRepeatIntervalMs = 550;
+  int alertEmitCount = 0;
+  String lastAlertCode = 'NONE';
+  String lastAlertReasonClass = 'NONE';
+  DriverAlertSeverity? lastAlertSeverity;
+  DateTime? lastAlertAtUtc;
+  final Queue<String> recentAlertEvents = Queue<String>();
+  Future<void> Function()? onRequestAlertTestTone;
+}
+
+class ReadableCopyStateStore {
+  int retentionDays = 7;
+  int maxFileBytes = 4 * 1024 * 1024;
+  bool previewLoading = false;
+  int fileCount = 0;
+  String? directoryPath;
+  String? previewError;
+  String? lastExportPath;
+  DateTime? lastUpdatedAtUtc;
+  final Queue<String> recentLines = Queue<String>();
+  Future<ReadableLocalCopyPreview> Function()? onRequestPreview;
+  Future<String?> Function()? onRequestExport;
+  Future<void> Function(int retentionDays)? onRetentionDaysChanged;
+  Future<void> Function(int maxFileBytes)? onMaxFileBytesChanged;
+}
+
+class ConfigStateStore {
+  String apiUrl = "https://your-backend-api.local/api/telemetry";
+  List<double> throttleMap = [0.0, 25.0, 50.0, 75.0, 100.0];
+  List<double> throttleMapDraft = [0.0, 25.0, 50.0, 75.0, 100.0];
+  String selectedThrottleMapProfile = 'Default';
+  final Map<String, List<double>> throttleMapPresets = {
+    'Default': [0.0, 25.0, 50.0, 75.0, 100.0],
+  };
+  bool useLightTheme = false;
+  bool useDictionaryAuxDispatch = true;
+  double speedUpperThreshold = 40.0;
+  double speedLowerThreshold = 25.0;
+  String graphMetric = "speed";
+}
+
+class TelemetryMetricsStore {
+  // Pedal states
+  double throttlePercent = 0.0;
+  bool isBrakePressed = false;
+
+  // Aux states
+  bool leftTurn = false;
+  bool rightTurn = false;
+  bool brakeLight = false;
+  bool headlights = false;
+  bool hazards = false;
+  bool horn = false;
+  bool wipers = false;
+
+  // Power & Environment
+  double mainVoltage = 0.0;
+  double current780 = 0.0;
+  double current740 = 0.0;
+  double mcTempC = 45.0;
+  double battTempC = 35.0;
+
+  // Energy
+  double energyJ780 = 0.0;
+  double energyJ740 = 0.0;
+
+  // EV Metrics
+  double speedKmh = 0.0;
+  double distanceKm = 0.0;
+  int lapNumber = 1;
+
+  final Queue<double> speedHistory = Queue<double>();
+  final Queue<double> powerKwHistory = Queue<double>();
+
+  double instKmPerKwh = 0.0;
+  double avgKmPerKwh = 0.0;
+
+  // Debug & Engineer screen
+  Map<int, String> lastCanPayloads = {};
+  List<double> bmsCells = List.filled(24, 3.80);
+  double bus12V = 12.4;
+  List<String> mcFaults = ["NONE"];
+
+  int errorCount = 0;
+  String lastErrorCode = "OK";
+  String strategy = "PACE";
+
+  final Queue<double> graphHistory = Queue<double>();
+}
+
+class GpsStateStore {
+  int gpsSatellites = 0;
+  bool gpsLocked = false;
+  bool usingPhoneGpsFallback = false;
+  double? currentGpsLat;
+  double? currentGpsLon;
+  double? currentGpsHeadingDeg;
+  double? currentGpsSpeedKmh;
+  DateTime? currentGpsSampleAtUtc;
+  String? currentGpsSource;
+  bool notificationPermissionGranted = true;
+  bool backgroundLocationPermissionGranted = true;
+  int gpsSourceTransitions = 0;
+  DateTime? lastGpsSourceChangedAtUtc;
+  double? phoneGpsAccuracyM;
+  DateTime lastExternalGpsMessageAt = DateTime.now();
+}
 
 class DashboardState extends ChangeNotifier {
   MqttStatus _mqttStatus = MqttStatus.disconnected;
@@ -21,10 +168,70 @@ class DashboardState extends ChangeNotifier {
 
   String _sessionName = "";
   String _sessionId = "";
-  bool _isLogging = false;
-  UiMode _uiMode = UiMode.driver;
-  SessionState _sessionState = SessionState.idle;
-  LapPhase _lapPhase = LapPhase.prestartCheck;
+  final SessionControlStore _sessionControl = SessionControlStore();
+  SpoolHealthStore _spoolHealth = SpoolHealthStore();
+  bool _ownsSpoolHealth = true;
+  final AlertStateStore _alerts = AlertStateStore();
+  final ReadableCopyStateStore _readableCopy = ReadableCopyStateStore();
+  final ConfigStateStore _config = ConfigStateStore();
+  final TelemetryMetricsStore _metrics = TelemetryMetricsStore();
+  final GpsStateStore _gps = GpsStateStore();
+
+  SpoolHealthStore get spoolHealth => _spoolHealth;
+  SessionControlStore get sessionControl => _sessionControl;
+  AlertStateStore get alerts => _alerts;
+  ReadableCopyStateStore get readableCopy => _readableCopy;
+  ConfigStateStore get config => _config;
+  TelemetryMetricsStore get metrics => _metrics;
+  GpsStateStore get gps => _gps;
+
+  void attachSpoolHealthStore(SpoolHealthStore store) {
+    if (identical(_spoolHealth, store)) {
+      return;
+    }
+
+    _spoolHealth.removeListener(_handleSpoolHealthChanged);
+    if (_ownsSpoolHealth) {
+      _spoolHealth.dispose();
+    }
+
+    _spoolHealth = store;
+    _ownsSpoolHealth = false;
+    _spoolHealth.addListener(_handleSpoolHealthChanged);
+    notifyListeners();
+  }
+
+  UiMode get _uiMode => _sessionControl.uiMode;
+  set _uiMode(UiMode value) => _sessionControl.uiMode = value;
+
+  SessionState get _sessionState => _sessionControl.sessionState;
+
+  LapPhase get _lapPhase => _sessionControl.lapPhase;
+  set _lapPhase(LapPhase value) => _sessionControl.lapPhase = value;
+
+  bool get _isLogging => _sessionControl.isLogging;
+
+  int get lapsPlanned => _sessionControl.lapsPlanned;
+  set lapsPlanned(int value) => _sessionControl.lapsPlanned = value;
+
+  int get lapsCompleted => _sessionControl.lapsCompleted;
+  set lapsCompleted(int value) => _sessionControl.lapsCompleted = value;
+
+  int get crossingDeadzoneMs => _sessionControl.crossingDeadzoneMs;
+  set crossingDeadzoneMs(int value) =>
+      _sessionControl.crossingDeadzoneMs = value;
+
+  int get crossingDeadzoneRemainingMs =>
+      _sessionControl.crossingDeadzoneRemainingMs;
+  set crossingDeadzoneRemainingMs(int value) =>
+      _sessionControl.crossingDeadzoneRemainingMs = value;
+
+  bool get crossingValid => _sessionControl.crossingValid;
+  set crossingValid(bool value) => _sessionControl.crossingValid = value;
+
+  int get sessionTimeSeconds => _sessionControl.sessionTimeSeconds;
+  set sessionTimeSeconds(int value) =>
+      _sessionControl.sessionTimeSeconds = value;
 
   final SessionOrchestrator _sessionOrchestrator = SessionOrchestrator();
   final LapBoundaryService _lapBoundaryService =
@@ -38,11 +245,10 @@ class DashboardState extends ChangeNotifier {
   String? lastCrossingReason;
   double? lastCrossingConfidence;
 
-  int lapsPlanned = 1;
-  int lapsCompleted = 0;
-  int crossingDeadzoneMs = 3000;
-  int crossingDeadzoneRemainingMs = 0;
-  bool crossingValid = false;
+  LapDividerMode lapDividerMode = LapDividerMode.geofence;
+  double distanceLapDividerKm = 0.25;
+  int gpsFallbackPeriodMs = 5000;
+  double? _nextDistanceDividerKm;
 
   bool get isLogging => _isLogging;
   String get sessionName => _sessionName;
@@ -80,6 +286,25 @@ class DashboardState extends ChangeNotifier {
       case LapPhase.sessionComplete:
         return 'SESSION OK';
     }
+  }
+
+  String get lapDividerModeText {
+    switch (lapDividerMode) {
+      case LapDividerMode.geofence:
+        return 'GEOFENCE';
+      case LapDividerMode.distance:
+        return 'DISTANCE';
+      case LapDividerMode.none:
+        return 'NONE';
+    }
+  }
+
+  String get distanceLapDividerKmText {
+    return '${distanceLapDividerKm.toStringAsFixed(2)} km';
+  }
+
+  String get gpsFallbackPeriodText {
+    return '${(gpsFallbackPeriodMs / 1000.0).toStringAsFixed(1)} s';
   }
 
   String get gpsSourceText {
@@ -164,6 +389,9 @@ class DashboardState extends ChangeNotifier {
       lastSeqInSession: max(0, lastSeqInSession),
       gpsLocked: gpsLocked,
       usingPhoneGpsFallback: usingPhoneGpsFallback,
+      lapDividerMode: lapDividerMode,
+      distanceLapDividerKm: distanceLapDividerKm,
+      gpsFallbackPeriodMs: gpsFallbackPeriodMs,
       updatedAtUtc: updatedAt,
     );
   }
@@ -175,6 +403,14 @@ class DashboardState extends ChangeNotifier {
     sessionTimeSeconds = max(0, snapshot.sessionTimeSeconds);
     gpsLocked = snapshot.gpsLocked;
     usingPhoneGpsFallback = snapshot.usingPhoneGpsFallback;
+    lapDividerMode = snapshot.lapDividerMode;
+    distanceLapDividerKm = snapshot.distanceLapDividerKm
+        .clamp(0.05, 10.0)
+        .toDouble();
+    gpsFallbackPeriodMs = snapshot.gpsFallbackPeriodMs
+        .clamp(1000, 30000)
+        .toInt();
+    _nextDistanceDividerKm = null;
     if (!usingPhoneGpsFallback) {
       phoneGpsAccuracyM = null;
     }
@@ -283,6 +519,7 @@ class DashboardState extends ChangeNotifier {
 
     sessionTimeSeconds = 0;
     lapNumber = 1;
+    _nextDistanceDividerKm = null;
     startBlockReason = null;
     endBlockReason = null;
     _applySessionControlState(decision.nextControl);
@@ -292,7 +529,9 @@ class DashboardState extends ChangeNotifier {
 
   // STOP SESSION
   bool stopSession({bool abort = false}) {
-    if (!abort && _requiresReplayDrainBeforeStop && unsentBatchCount > 0) {
+    if (!abort &&
+        _spoolHealth.requiresReplayDrainBeforeStop &&
+        unsentBatchCount > 0) {
       endBlockReason =
           'Stop blocked until recovered-session replay backlog is drained.';
       notifyListeners();
@@ -376,26 +615,43 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _setSessionState(SessionState next, {bool shouldNotify = true}) {
-    if (_sessionState == next) {
+  void setLapDividerMode(LapDividerMode mode) {
+    if (lapDividerMode == mode) {
       return;
     }
-    _sessionState = next;
-    _isLogging = _sessionState == SessionState.logging;
-    if (shouldNotify) {
-      notifyListeners();
+    lapDividerMode = mode;
+    _nextDistanceDividerKm = null;
+    if (lapDividerMode != LapDividerMode.geofence) {
+      crossingDeadzoneRemainingMs = 0;
+      if (_lapPhase == LapPhase.crossingDeadzone ||
+          _lapPhase == LapPhase.crossingCandidate) {
+        _lapPhase = LapPhase.running;
+      }
     }
+    notifyListeners();
+  }
+
+  void setDistanceLapDividerKm(double value) {
+    final bounded = value.clamp(0.05, 10.0).toDouble();
+    if ((distanceLapDividerKm - bounded).abs() < 0.001) {
+      return;
+    }
+    distanceLapDividerKm = bounded;
+    _nextDistanceDividerKm = null;
+    notifyListeners();
+  }
+
+  void setGpsFallbackPeriodMs(int value) {
+    final bounded = value.clamp(1000, 30000).toInt();
+    if (gpsFallbackPeriodMs == bounded) {
+      return;
+    }
+    gpsFallbackPeriodMs = bounded;
+    notifyListeners();
   }
 
   void _applySessionControlState(SessionControlState control) {
-    lapsPlanned = control.lapsPlanned;
-    lapsCompleted = control.lapsCompleted;
-    crossingDeadzoneMs = control.crossingDeadzoneMs;
-    crossingDeadzoneRemainingMs = control.crossingDeadzoneRemainingMs;
-    crossingValid = control.crossingValid;
-    _uiMode = control.uiMode;
-    _lapPhase = control.lapPhase;
-    _setSessionState(control.sessionState, shouldNotify: false);
+    _sessionControl.applyControlState(control);
   }
 
   void _updateStartGateFromDecision(StartGateStatus status) {
@@ -403,19 +659,20 @@ class DashboardState extends ChangeNotifier {
     startGateRemainingMs = status.holdRemainingMs;
   }
 
+  void _handleSpoolHealthChanged() {
+    notifyListeners();
+  }
+
   void resetSessionState() {
     _sessionName = '';
     _sessionId = '';
-    _lapPhase = LapPhase.prestartCheck;
-    _requiresReplayDrainBeforeStop = false;
-    lapsCompleted = 0;
-    crossingValid = false;
-    crossingDeadzoneRemainingMs = 0;
+    _sessionControl.reset();
+    _spoolHealth.clearReplayDrainGate();
     startBlockReason = null;
     endBlockReason = null;
     lastCrossingReason = null;
     lastCrossingConfidence = null;
-    _setSessionState(SessionState.idle, shouldNotify: false);
+    _nextDistanceDividerKm = null;
     _lapBoundaryService.resetTracking();
     notifyListeners();
   }
@@ -443,6 +700,10 @@ class DashboardState extends ChangeNotifier {
     currentGpsSpeedKmh = speedKmh;
     currentGpsSampleAtUtc = sampleTimestampUtc;
     currentGpsSource = source;
+
+    if (lapDividerMode != LapDividerMode.geofence) {
+      return;
+    }
 
     final session = sessionControlState;
     final eventSessionId = _sessionId.isEmpty ? 'pending-session' : _sessionId;
@@ -520,32 +781,38 @@ class DashboardState extends ChangeNotifier {
   // Connections
   bool isConnected = false;
   bool isServerConnected = false;
-  int unsentBatchCount = 0;
-  int oldestUnsentAgeMs = 0;
-  int spoolPendingBatchCount = 0;
-  int spoolPendingBatchCapacity = 0;
-  bool spoolCapacityWarning = false;
-  int recoveryResumeCount = 0;
-  DateTime? lastRecoveryAtUtc;
-  bool _requiresReplayDrainBeforeStop = false;
-  DateTime? _oldestUnsentEnqueuedAtUtc;
+  int get unsentBatchCount => _spoolHealth.pendingPublishCount;
+  int get oldestUnsentAgeMs => _spoolHealth.oldestAgeMs;
+  int get spoolPendingBatchCount => _spoolHealth.pendingBatchCount;
+  int get spoolPendingBatchCapacity => _spoolHealth.pendingBatchCapacity;
+  bool get spoolCapacityWarning => _spoolHealth.capacityWarning;
+  int get recoveryResumeCount => _spoolHealth.recoveryResumeCount;
+  DateTime? get lastRecoveryAtUtc => _spoolHealth.lastRecoveryAtUtc;
   bool enableSimulation = false;
   bool isSimulated = false;
 
   // EV Metrics
-  double speedKmh = 0.0;
-  double distanceKm = 0.0;
-  int lapNumber = 1;
+  double get speedKmh => _metrics.speedKmh;
+  set speedKmh(double value) => _metrics.speedKmh = value;
+  double get distanceKm => _metrics.distanceKm;
+  set distanceKm(double value) => _metrics.distanceKm = value;
+  int get lapNumber => _metrics.lapNumber;
+  set lapNumber(int value) => _metrics.lapNumber = value;
 
-  final Queue<double> _speedHistory = Queue<double>();
-  final Queue<double> _powerKwHistory = Queue<double>();
+  Queue<double> get _speedHistory => _metrics.speedHistory;
+  Queue<double> get _powerKwHistory => _metrics.powerKwHistory;
 
-  double instKmPerKwh = 0.0;
-  double avgKmPerKwh = 0.0;
+  double get instKmPerKwh => _metrics.instKmPerKwh;
+  set instKmPerKwh(double value) => _metrics.instKmPerKwh = value;
+  double get avgKmPerKwh => _metrics.avgKmPerKwh;
+  set avgKmPerKwh(double value) => _metrics.avgKmPerKwh = value;
 
-  int errorCount = 0;
-  String lastErrorCode = "OK";
-  String strategy = "PACE";
+  int get errorCount => _metrics.errorCount;
+  set errorCount(int value) => _metrics.errorCount = value;
+  String get lastErrorCode => _metrics.lastErrorCode;
+  set lastErrorCode(String value) => _metrics.lastErrorCode = value;
+  String get strategy => _metrics.strategy;
+  set strategy(String value) => _metrics.strategy = value;
 
   int commandSentCount = 0;
   int commandCompletionCount = 0;
@@ -569,52 +836,107 @@ class DashboardState extends ChangeNotifier {
   DateTime? lastAlertAtUtc;
   final Queue<String> recentAlertEvents = Queue<String>();
 
-  int readableCopyRetentionDays = 7;
-  int readableCopyMaxFileBytes = 4 * 1024 * 1024;
-  bool readableCopyPreviewLoading = false;
-  int readableCopyFileCount = 0;
-  String? readableCopyDirectoryPath;
-  String? readableCopyPreviewError;
-  String? readableCopyLastExportPath;
-  DateTime? readableCopyLastUpdatedAtUtc;
-  final Queue<String> readableCopyRecentLines = Queue<String>();
+  int get readableCopyRetentionDays => _readableCopy.retentionDays;
+  set readableCopyRetentionDays(int value) =>
+      _readableCopy.retentionDays = value;
+  int get readableCopyMaxFileBytes => _readableCopy.maxFileBytes;
+  set readableCopyMaxFileBytes(int value) => _readableCopy.maxFileBytes = value;
+  bool get readableCopyPreviewLoading => _readableCopy.previewLoading;
+  set readableCopyPreviewLoading(bool value) =>
+      _readableCopy.previewLoading = value;
+  int get readableCopyFileCount => _readableCopy.fileCount;
+  set readableCopyFileCount(int value) => _readableCopy.fileCount = value;
+  String? get readableCopyDirectoryPath => _readableCopy.directoryPath;
+  set readableCopyDirectoryPath(String? value) =>
+      _readableCopy.directoryPath = value;
+  String? get readableCopyPreviewError => _readableCopy.previewError;
+  set readableCopyPreviewError(String? value) =>
+      _readableCopy.previewError = value;
+  String? get readableCopyLastExportPath => _readableCopy.lastExportPath;
+  set readableCopyLastExportPath(String? value) =>
+      _readableCopy.lastExportPath = value;
+  DateTime? get readableCopyLastUpdatedAtUtc => _readableCopy.lastUpdatedAtUtc;
+  set readableCopyLastUpdatedAtUtc(DateTime? value) =>
+      _readableCopy.lastUpdatedAtUtc = value;
+  Queue<String> get readableCopyRecentLines => _readableCopy.recentLines;
 
-  Future<void> Function()? onRequestAlertTestTone;
-  Future<ReadableLocalCopyPreview> Function()? onRequestReadableCopyPreview;
-  Future<String?> Function()? onRequestReadableCopyExport;
-  Future<void> Function(int retentionDays)? onReadableCopyRetentionDaysChanged;
-  Future<void> Function(int maxFileBytes)? onReadableCopyMaxFileBytesChanged;
+  Future<ReadableLocalCopyPreview> Function()?
+  get onRequestReadableCopyPreview => _readableCopy.onRequestPreview;
+  set onRequestReadableCopyPreview(
+    Future<ReadableLocalCopyPreview> Function()? value,
+  ) => _readableCopy.onRequestPreview = value;
+  Future<String?> Function()? get onRequestReadableCopyExport =>
+      _readableCopy.onRequestExport;
+  set onRequestReadableCopyExport(Future<String?> Function()? value) =>
+      _readableCopy.onRequestExport = value;
+  Future<void> Function(int retentionDays)?
+  get onReadableCopyRetentionDaysChanged =>
+      _readableCopy.onRetentionDaysChanged;
+  set onReadableCopyRetentionDaysChanged(
+    Future<void> Function(int retentionDays)? value,
+  ) => _readableCopy.onRetentionDaysChanged = value;
+  Future<void> Function(int maxFileBytes)?
+  get onReadableCopyMaxFileBytesChanged => _readableCopy.onMaxFileBytesChanged;
+  set onReadableCopyMaxFileBytesChanged(
+    Future<void> Function(int maxFileBytes)? value,
+  ) => _readableCopy.onMaxFileBytesChanged = value;
   void Function(bool enabled)? onSimulationToggleChanged;
 
   Future<TxCommandResult> Function(TxCanCommand command)? onTxCommand;
 
   // Debug & Engineer screen
-  Map<int, String> lastCanPayloads = {};
-  List<double> bmsCells = List.filled(24, 3.80);
-  double bus12V = 12.4;
-  List<String> mcFaults = ["NONE"];
+  Map<int, String> get lastCanPayloads => _metrics.lastCanPayloads;
+  List<double> get bmsCells => _metrics.bmsCells;
+  set bmsCells(List<double> value) => _metrics.bmsCells = value;
+  double get bus12V => _metrics.bus12V;
+  set bus12V(double value) => _metrics.bus12V = value;
+  List<String> get mcFaults => _metrics.mcFaults;
+  set mcFaults(List<String> value) => _metrics.mcFaults = value;
 
   // GPS
-  int gpsSatellites = 0;
-  bool gpsLocked = false;
-  bool usingPhoneGpsFallback = false;
-  double? currentGpsLat;
-  double? currentGpsLon;
-  double? currentGpsHeadingDeg;
-  double? currentGpsSpeedKmh;
-  DateTime? currentGpsSampleAtUtc;
-  String? currentGpsSource;
-  bool notificationPermissionGranted = true;
-  bool backgroundLocationPermissionGranted = true;
-  int gpsSourceTransitions = 0;
-  DateTime? lastGpsSourceChangedAtUtc;
-  double? phoneGpsAccuracyM;
-  final Duration externalGpsTimeout;
-  DateTime _lastExternalGpsMessageAt = DateTime.now();
+  int get gpsSatellites => _gps.gpsSatellites;
+  set gpsSatellites(int value) => _gps.gpsSatellites = value;
+  bool get gpsLocked => _gps.gpsLocked;
+  set gpsLocked(bool value) => _gps.gpsLocked = value;
+  bool get usingPhoneGpsFallback => _gps.usingPhoneGpsFallback;
+  set usingPhoneGpsFallback(bool value) => _gps.usingPhoneGpsFallback = value;
+  double? get currentGpsLat => _gps.currentGpsLat;
+  set currentGpsLat(double? value) => _gps.currentGpsLat = value;
+  double? get currentGpsLon => _gps.currentGpsLon;
+  set currentGpsLon(double? value) => _gps.currentGpsLon = value;
+  double? get currentGpsHeadingDeg => _gps.currentGpsHeadingDeg;
+  set currentGpsHeadingDeg(double? value) => _gps.currentGpsHeadingDeg = value;
+  double? get currentGpsSpeedKmh => _gps.currentGpsSpeedKmh;
+  set currentGpsSpeedKmh(double? value) => _gps.currentGpsSpeedKmh = value;
+  DateTime? get currentGpsSampleAtUtc => _gps.currentGpsSampleAtUtc;
+  set currentGpsSampleAtUtc(DateTime? value) =>
+      _gps.currentGpsSampleAtUtc = value;
+  String? get currentGpsSource => _gps.currentGpsSource;
+  set currentGpsSource(String? value) => _gps.currentGpsSource = value;
+  bool get notificationPermissionGranted => _gps.notificationPermissionGranted;
+  set notificationPermissionGranted(bool value) =>
+      _gps.notificationPermissionGranted = value;
+  bool get backgroundLocationPermissionGranted =>
+      _gps.backgroundLocationPermissionGranted;
+  set backgroundLocationPermissionGranted(bool value) =>
+      _gps.backgroundLocationPermissionGranted = value;
+  int get gpsSourceTransitions => _gps.gpsSourceTransitions;
+  set gpsSourceTransitions(int value) => _gps.gpsSourceTransitions = value;
+  DateTime? get lastGpsSourceChangedAtUtc => _gps.lastGpsSourceChangedAtUtc;
+  set lastGpsSourceChangedAtUtc(DateTime? value) =>
+      _gps.lastGpsSourceChangedAtUtc = value;
+  double? get phoneGpsAccuracyM => _gps.phoneGpsAccuracyM;
+  set phoneGpsAccuracyM(double? value) => _gps.phoneGpsAccuracyM = value;
+  DateTime get _lastExternalGpsMessageAt => _gps.lastExternalGpsMessageAt;
+  set _lastExternalGpsMessageAt(DateTime value) =>
+      _gps.lastExternalGpsMessageAt = value;
+
+  Duration get externalGpsTimeout =>
+      Duration(milliseconds: gpsFallbackPeriodMs);
 
   bool get isExternalGpsStale {
     return DateTime.now().difference(_lastExternalGpsMessageAt) >
-        externalGpsTimeout;
+        Duration(milliseconds: gpsFallbackPeriodMs);
   }
 
   String get gpsStatusText {
@@ -644,14 +966,17 @@ class DashboardState extends ChangeNotifier {
   }
 
   // Configuration
-  String apiUrl = "https://your-backend-api.local/api/telemetry";
-  List<double> throttleMap = [0.0, 25.0, 50.0, 75.0, 100.0];
-  List<double> throttleMapDraft = [0.0, 25.0, 50.0, 75.0, 100.0];
-  String selectedThrottleMapProfile = 'Default';
-
-  final Map<String, List<double>> _throttleMapPresets = {
-    'Default': [0.0, 25.0, 50.0, 75.0, 100.0],
-  };
+  String get apiUrl => _config.apiUrl;
+  set apiUrl(String value) => _config.apiUrl = value;
+  List<double> get throttleMap => _config.throttleMap;
+  set throttleMap(List<double> value) => _config.throttleMap = value;
+  List<double> get throttleMapDraft => _config.throttleMapDraft;
+  set throttleMapDraft(List<double> value) => _config.throttleMapDraft = value;
+  String get selectedThrottleMapProfile => _config.selectedThrottleMapProfile;
+  set selectedThrottleMapProfile(String value) =>
+      _config.selectedThrottleMapProfile = value;
+  Map<String, List<double>> get _throttleMapPresets =>
+      _config.throttleMapPresets;
 
   List<String> get throttleMapPresetNames {
     return _throttleMapPresets.keys.toList(growable: false);
@@ -673,16 +998,22 @@ class DashboardState extends ChangeNotifier {
   }
 
   // Theme
-  bool useLightTheme = false;
-  bool useDictionaryAuxDispatch = true;
+  bool get useLightTheme => _config.useLightTheme;
+  set useLightTheme(bool value) => _config.useLightTheme = value;
+  bool get useDictionaryAuxDispatch => _config.useDictionaryAuxDispatch;
+  set useDictionaryAuxDispatch(bool value) =>
+      _config.useDictionaryAuxDispatch = value;
 
   // Speed bar thresholds
-  double speedUpperThreshold = 40.0;
-  double speedLowerThreshold = 25.0;
+  double get speedUpperThreshold => _config.speedUpperThreshold;
+  set speedUpperThreshold(double value) => _config.speedUpperThreshold = value;
+  double get speedLowerThreshold => _config.speedLowerThreshold;
+  set speedLowerThreshold(double value) => _config.speedLowerThreshold = value;
 
   // Configurable graph
-  String graphMetric = "speed"; // "speed", "power", "efficiency"
-  final Queue<double> graphHistory = Queue<double>();
+  String get graphMetric => _config.graphMetric;
+  set graphMetric(String value) => _config.graphMetric = value;
+  Queue<double> get graphHistory => _metrics.graphHistory;
   static const int maxGraphPoints = 100;
 
   void Function(String)? onUsbTx;
@@ -743,35 +1074,21 @@ class DashboardState extends ChangeNotifier {
   }
 
   // Session timer
-  int sessionTimeSeconds = 0;
-  Timer? _sessionTimer;
+  late final _SessionTicker _sessionTicker;
 
-  DashboardState({this.externalGpsTimeout = const Duration(seconds: 5)}) {
-    _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      sessionTimeSeconds++;
+  DashboardState({Duration externalGpsTimeout = const Duration(seconds: 5)}) {
+    _spoolHealth.addListener(_handleSpoolHealthChanged);
 
-      if (_oldestUnsentEnqueuedAtUtc != null && unsentBatchCount > 0) {
-        oldestUnsentAgeMs = DateTime.now()
-            .toUtc()
-            .difference(_oldestUnsentEnqueuedAtUtc!)
-            .inMilliseconds;
-      } else if (oldestUnsentAgeMs != 0) {
-        oldestUnsentAgeMs = 0;
-      }
+    final initialFallbackPeriodMs = externalGpsTimeout.inMilliseconds;
+    gpsFallbackPeriodMs = initialFallbackPeriodMs <= 0
+        ? 5000
+        : initialFallbackPeriodMs.clamp(1, 30000).toInt();
 
-      if (crossingDeadzoneRemainingMs > 0) {
-        crossingDeadzoneRemainingMs = max(
-          0,
-          crossingDeadzoneRemainingMs - 1000,
-        );
-        if (crossingDeadzoneRemainingMs == 0 &&
-            _lapPhase == LapPhase.crossingDeadzone) {
-          _lapPhase = LapPhase.running;
-        }
-      }
-
-      notifyListeners();
-    });
+    _sessionTicker = _SessionTicker(
+      sessionControl: _sessionControl,
+      onTick: notifyListeners,
+    );
+    _sessionTicker.start();
 
     final gateStatus = _sessionOrchestrator.evaluateStartGate(
       speedKmh: speedKmh,
@@ -782,7 +1099,11 @@ class DashboardState extends ChangeNotifier {
 
   @override
   void dispose() {
-    _sessionTimer?.cancel();
+    _sessionTicker.stop();
+    _spoolHealth.removeListener(_handleSpoolHealthChanged);
+    if (_ownsSpoolHealth) {
+      _spoolHealth.dispose();
+    }
     super.dispose();
   }
 
@@ -898,7 +1219,7 @@ class DashboardState extends ChangeNotifier {
   }
 
   void requestAlertTestTone() {
-    final callback = onRequestAlertTestTone;
+    final callback = _alerts.onRequestAlertTestTone;
     if (callback == null) {
       return;
     }
@@ -1042,61 +1363,24 @@ class DashboardState extends ChangeNotifier {
     required int count,
     required DateTime? oldestEnqueuedAtUtc,
   }) {
-    final sanitizedCount = max(0, count);
-    final nextOldest = sanitizedCount > 0 ? oldestEnqueuedAtUtc : null;
-    final nextAgeMs = nextOldest == null
-        ? 0
-        : DateTime.now().toUtc().difference(nextOldest).inMilliseconds;
-
-    final changed =
-        unsentBatchCount != sanitizedCount ||
-        _oldestUnsentEnqueuedAtUtc != nextOldest ||
-        oldestUnsentAgeMs != nextAgeMs;
-
-    unsentBatchCount = sanitizedCount;
-    _oldestUnsentEnqueuedAtUtc = nextOldest;
-    oldestUnsentAgeMs = nextAgeMs;
-
-    if (_requiresReplayDrainBeforeStop && sanitizedCount == 0) {
-      _requiresReplayDrainBeforeStop = false;
-    }
-
-    if (changed) {
-      notifyListeners();
-    }
+    _spoolHealth.updateBacklog(
+      count: count,
+      oldestEnqueuedAtUtc: oldestEnqueuedAtUtc,
+    );
   }
 
   void updateSpoolHealth({
     required int pendingBatchCount,
     required int pendingBatchCapacity,
   }) {
-    final sanitizedPending = max(0, pendingBatchCount);
-    final sanitizedCapacity = max(0, pendingBatchCapacity);
-    final warningThreshold = sanitizedCapacity <= 0
-        ? 0
-        : ((sanitizedCapacity * 0.8).ceil());
-    final warning =
-        sanitizedCapacity > 0 && sanitizedPending >= warningThreshold;
-
-    final changed =
-        spoolPendingBatchCount != sanitizedPending ||
-        spoolPendingBatchCapacity != sanitizedCapacity ||
-        spoolCapacityWarning != warning;
-
-    spoolPendingBatchCount = sanitizedPending;
-    spoolPendingBatchCapacity = sanitizedCapacity;
-    spoolCapacityWarning = warning;
-
-    if (changed) {
-      notifyListeners();
-    }
+    _spoolHealth.updatePendingCapacity(
+      pendingBatchCount: pendingBatchCount,
+      pendingBatchCapacity: pendingBatchCapacity,
+    );
   }
 
   void recordRecoveryResume({DateTime? atUtc}) {
-    recoveryResumeCount += 1;
-    _requiresReplayDrainBeforeStop = true;
-    lastRecoveryAtUtc = (atUtc ?? DateTime.now().toUtc()).toUtc();
-    notifyListeners();
+    _spoolHealth.recordRecoveryResume(atUtc: atUtc);
   }
 
   void updateApiUrl(String url) {
@@ -1340,6 +1624,11 @@ class DashboardState extends ChangeNotifier {
     speedKmh = speed;
     distanceKm = distance;
     lapNumber = lap;
+
+    if (_isLogging && lapDividerMode == LapDividerMode.distance) {
+      _applyDistanceLapDivider(distanceKm);
+    }
+
     final gateStatus = _sessionOrchestrator.evaluateStartGate(
       speedKmh: speed,
       nowUtc: DateTime.now().toUtc(),
@@ -1347,6 +1636,48 @@ class DashboardState extends ChangeNotifier {
     _updateStartGateFromDecision(gateStatus);
     _updateEfficiency();
     notifyListeners();
+  }
+
+  void _applyDistanceLapDivider(double cumulativeDistanceKm) {
+    final dividerKm = distanceLapDividerKm;
+    if (dividerKm <= 0) {
+      return;
+    }
+
+    final nextDivider = _nextDistanceDividerKm;
+    if (nextDivider == null) {
+      _nextDistanceDividerKm = cumulativeDistanceKm + dividerKm;
+      return;
+    }
+
+    final resetThresholdKm = nextDivider - (dividerKm * 1.25);
+    if (cumulativeDistanceKm < resetThresholdKm) {
+      _nextDistanceDividerKm = cumulativeDistanceKm + dividerKm;
+      return;
+    }
+
+    var cursor = nextDivider;
+    while (cumulativeDistanceKm >= cursor && lapsCompleted < lapsPlanned) {
+      _applyDividerLapAccepted(reason: 'distance_divider');
+      cursor += dividerKm;
+    }
+    _nextDistanceDividerKm = cursor;
+  }
+
+  void _applyDividerLapAccepted({required String reason}) {
+    final nextLapsCompleted = (lapsCompleted + 1).clamp(0, lapsPlanned).toInt();
+    final nextControl = sessionControlState.copyWith(
+      lapsCompleted: nextLapsCompleted,
+      lapPhase: nextLapsCompleted >= lapsPlanned
+          ? LapPhase.lapComplete
+          : LapPhase.running,
+      crossingValid: true,
+      crossingDeadzoneRemainingMs: 0,
+    );
+    _applySessionControlState(nextControl);
+    lapNumber = max(1, lapsCompleted + 1);
+    lastCrossingReason = reason;
+    lastCrossingConfidence = 1.0;
   }
 
   void _updateEfficiency() {

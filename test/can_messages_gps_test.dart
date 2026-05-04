@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/models/can_messages.dart';
+import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
 
 void main() {
   group('External GPS payload decoders', () {

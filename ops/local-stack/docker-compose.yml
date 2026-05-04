@@ -1,0 +1,119 @@
+version: '3.9'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: ect-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-telemetry}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${TS_PORT:-5432}:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-telemetry}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - telemetry_net
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: ect-mosquitto
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - telemetry_net
+
+  db-bootstrap:
+    image: postgres:16
+    container_name: ect-db-bootstrap
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: 'no'
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-telemetry}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    entrypoint: ["sh", "-c"]
+    command: >
+      set -e;
+      DSN="host=timescaledb port=5432 dbname=$${POSTGRES_DB} user=$${POSTGRES_USER} password=$${POSTGRES_PASSWORD} sslmode=disable";
+      echo "Applying telemetry migrations...";
+      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/001_telemetry_schema.sql;
+      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/002_indexes_policies.sql;
+      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/003_command_and_recovery_audit.sql;
+      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/004_query_performance_views.sql;
+      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/ops/local-stack/bootstrap/10_local_roles.sql;
+      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/scripts/verify_setup.sql;
+      echo "Database bootstrap complete.";
+    volumes:
+      - ../../db:/workspace/db:ro
+      - ../..:/workspace:ro
+    networks:
+      - telemetry_net
+
+  telegraf:
+    build:
+      context: ./telegraf
+      dockerfile: Dockerfile
+    container_name: ect-telegraf
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      TS_HOST: timescaledb
+      TS_PORT: 5432
+      TS_DB: ${POSTGRES_DB:-telemetry}
+      TS_USER: telegraf
+      TS_PASSWORD: telegraf_dev
+    networks:
+      - telemetry_net
+
+  grafana:
+    image: grafana/grafana-oss:11.1.4
+    container_name: ect-grafana
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - telemetry_net
+
+networks:
+  telemetry_net:
+    driver: bridge
+
+volumes:
+  timescaledb_data:
+  mosquitto_data:
+  mosquitto_log:
+  grafana_data:

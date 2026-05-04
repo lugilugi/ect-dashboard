@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/models/tx_can_command.dart';
-import 'package:telemetry_dashboard/services/can_tx_service.dart';
-import 'package:telemetry_dashboard/services/command_dictionary_service.dart';
+import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
+import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
+import 'package:telemetry_dashboard/services/ingest/command_dictionary_service.dart';
 
 String _crc16Hex(String value) {
   int crc = 0xFFFF;

@@ -8,18 +8,14 @@ In-cabin telemetry dashboard for ECT Shell Eco-marathon workflows.
 - USB ingest from ESP32/CAN bridge.
 - MQTT export to `telemetry/eco_archers/events`.
 - Local spool and crash-recovery checkpointing.
-- Readable local NDJSON mirror for spool activity and telemetry traces.
+- Readable local CSV mirror for decoded telemetry by session.
 
 ## Local Storage
 
 - Spool DB: `edge_spool.db` managed by `LocalSpoolService`.
-- Readable mirror: NDJSON files in `readable_local_copy` under the app database directory.
-- Streams mirrored as human-readable lines:
-	- `publish_batches_YYYYMMDD.ndjson`
-	- `publish_attempts_YYYYMMDD.ndjson`
-	- `decoded_events_YYYYMMDD.ndjson`
-	- `raw_frames_YYYYMMDD.ndjson`
-	- `session_checkpoints_YYYYMMDD.ndjson`
+- Readable mirror: per-session CSV files in `readable_local_copy/session_csv` under the app database directory.
+- CSV naming:
+	- `session_<normalized_session_id>.csv`
 - Retention: readable mirror retention days are configurable in Service mode (default 7 days) and pruned at MQTT service startup.
 - Service tools: Config page includes readable mirror preview and export actions.
 
@@ -38,12 +34,27 @@ In-cabin telemetry dashboard for ECT Shell Eco-marathon workflows.
 - [db/migrations/001_telemetry_schema.sql](db/migrations/001_telemetry_schema.sql)
 - [db/migrations/002_indexes_policies.sql](db/migrations/002_indexes_policies.sql)
 - [db/migrations/003_command_and_recovery_audit.sql](db/migrations/003_command_and_recovery_audit.sql)
+- [db/migrations/004_query_performance_views.sql](db/migrations/004_query_performance_views.sql)
+
+### DB Setup Runbook and Scripts
+
+- [db/README.md](db/README.md)
+- [db/scripts/apply_migrations.ps1](db/scripts/apply_migrations.ps1)
+- [db/scripts/apply_migrations.sh](db/scripts/apply_migrations.sh)
+- [db/scripts/bootstrap_roles.sql](db/scripts/bootstrap_roles.sql)
+- [db/scripts/verify_setup.sql](db/scripts/verify_setup.sql)
 
 ### Telegraf and Mosquitto
 
 - [ops/telegraf/telegraf.conf](ops/telegraf/telegraf.conf)
 - [ops/mosquitto/mosquitto.conf.sample](ops/mosquitto/mosquitto.conf.sample)
 - [ops/mosquitto/README.md](ops/mosquitto/README.md)
+
+### One-Command Local Backend Stack
+
+- [ops/local-stack/docker-compose.yml](ops/local-stack/docker-compose.yml)
+- [ops/local-stack/README.md](ops/local-stack/README.md)
+- [ops/local-stack/telegraf/Dockerfile](ops/local-stack/telegraf/Dockerfile)
 
 ### Grafana Dashboards
 
@@ -61,6 +72,13 @@ Use your Timescale/PostgreSQL connection string in `TS_DSN` and run:
 psql "$TS_DSN" -f db/migrations/001_telemetry_schema.sql
 psql "$TS_DSN" -f db/migrations/002_indexes_policies.sql
 psql "$TS_DSN" -f db/migrations/003_command_and_recovery_audit.sql
+psql "$TS_DSN" -f db/migrations/004_query_performance_views.sql
+```
+
+PowerShell helper (Windows):
+
+```powershell
+./db/scripts/apply_migrations.ps1 -Dsn "$env:TS_DSN"
 ```
 
 ### 2. Verify Schema and Hypertables
@@ -91,9 +109,17 @@ SELECT COUNT(*) AS event_rows FROM telemetry.telemetry_events;
 SELECT COUNT(*) AS lap_rows FROM telemetry.laps;
 ```
 
+Or run the bundled verification script:
+
+```bash
+psql "$TS_DSN" -f db/scripts/verify_setup.sql
+```
+
 ### 4. Provision Grafana Dashboards
 
 Follow [ops/grafana/README.md](ops/grafana/README.md) to mount provisioning and dashboards into Grafana.
+
+For full DB bootstrap details, role setup, and smoke tests, see [db/README.md](db/README.md).
 
 ## Flutter Development
 

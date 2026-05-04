@@ -1,7 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:telemetry_dashboard/models/telemetry/phone_gps_sample.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/services/gps_source_manager.dart';
+import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
 
 Position _position({
   double lat = 14.0,
@@ -21,6 +22,23 @@ Position _position({
     headingAccuracy: 1.0,
     speed: speedMs,
     speedAccuracy: 0.1,
+  );
+}
+
+PhoneGpsSample _sample({
+  double lat = 14.0,
+  double lon = 121.0,
+  double headingDeg = 5.0,
+  double speedMps = 3.0,
+  double accuracyM = 4.0,
+}) {
+  return PhoneGpsSample(
+    latitude: lat,
+    longitude: lon,
+    headingDeg: headingDeg,
+    speedMps: speedMps,
+    accuracyM: accuracyM,
+    timestampUtc: DateTime.now().toUtc(),
   );
 }
 
@@ -76,6 +94,31 @@ void main() {
       expect(state.gpsLocked, isTrue);
       expect(state.gpsSourceText, 'PHONE');
       expect(state.phoneGpsAccuracyM, 3.0);
+
+      state.dispose();
+    });
+
+    test('forwards stale phone sample to fallback callback', () async {
+      final state = DashboardState(
+        externalGpsTimeout: const Duration(milliseconds: 1),
+      );
+      PhoneGpsSample? callbackSample;
+      final manager = GpsSourceManager(
+        state,
+        onPhoneFallbackSample: (sample) {
+          callbackSample = sample;
+        },
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+
+      manager.ingestPhoneSampleData(
+        _sample(headingDeg: 21.0, speedMps: 6.0, accuracyM: 2.5),
+      );
+
+      expect(callbackSample, isNotNull);
+      expect(callbackSample!.speedKmh, closeTo(21.6, 0.001));
+      expect(callbackSample!.accuracyM, 2.5);
 
       state.dispose();
     });

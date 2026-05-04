@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/services/readable_local_copy_writer.dart';
+import 'package:telemetry_dashboard/services/persistence/readable_local_copy_writer.dart';
 
 void main() {
   group('DashboardState readable local mirror controls', () {

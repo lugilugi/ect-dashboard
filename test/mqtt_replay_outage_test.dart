@@ -2,8 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/services/local_spool_service.dart';
-import 'package:telemetry_dashboard/services/mqtt_service.dart';
+import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
+import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
 
 class _PublishedMessage {
   final String topic;

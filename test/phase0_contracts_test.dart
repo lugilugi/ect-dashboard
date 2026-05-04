@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/models/session_models.dart';
-import 'package:telemetry_dashboard/models/telemetry_event.dart';
-import 'package:telemetry_dashboard/services/mqtt_payload_contract.dart';
+import 'package:telemetry_dashboard/models/session/session_models.dart';
+import 'package:telemetry_dashboard/models/telemetry/telemetry_event.dart';
+import 'package:telemetry_dashboard/services/transport/mqtt_payload_contract.dart';
 
 void main() {
   group('Phase 0 wire contracts', () {

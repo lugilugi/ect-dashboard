@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/models/session_models.dart';
-import 'package:telemetry_dashboard/services/lap_boundary_service.dart';
+import 'package:telemetry_dashboard/models/session/session_models.dart';
+import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
 
 SessionControlState _loggingControl() {
   return const SessionControlState(

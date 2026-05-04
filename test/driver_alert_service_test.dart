@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:telemetry_dashboard/models/driver_alert_models.dart';
-import 'package:telemetry_dashboard/models/session_models.dart';
+import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
+import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/services/driver_alert_service.dart';
-import 'package:telemetry_dashboard/services/lap_boundary_service.dart';
+import 'package:telemetry_dashboard/services/orchestration/driver_alert_service.dart';
+import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
 
 class _FakeAlertOutput implements DriverAlertOutput {
   final List<DriverAlertSeverity> audioEvents = <DriverAlertSeverity>[];
