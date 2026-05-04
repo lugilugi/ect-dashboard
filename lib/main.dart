@@ -85,7 +85,7 @@ class TelemetryBootstrapApp extends ConsumerWidget {
     );
 
     return MaterialApp.router(
-      title: 'Telemetry Dashboard',
+      title: 'Eco Archers Dashboard',
       builder: (context, child) {
         return MediaQuery(
           data: MediaQuery.of(
