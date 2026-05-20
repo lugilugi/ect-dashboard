@@ -11,7 +11,6 @@ import 'package:telemetry_dashboard/providers/app_providers.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
-import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
 enum ConfigSection {
   connectivity,
   canDictionary,
@@ -24,13 +23,13 @@ enum ConfigSection {
 
 class ConfigView extends ConsumerStatefulWidget {
   final Palette p;
-  const ConfigView({required this.p});
+  const ConfigView({super.key, required this.p});
 
   @override
   ConsumerState<ConfigView> createState() => ConfigViewState();
 }
 
-class ConfigViewState extends ConsumerState<ConfigView> {
+class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderStateMixin {
   ConfigSection _selectedSection = ConfigSection.connectivity;
   final TextEditingController _canSearchController = TextEditingController();
   final MapController _geofenceMapController = MapController();
@@ -40,6 +39,8 @@ class ConfigViewState extends ConsumerState<ConfigView> {
   bool _isDrawingGeofence = false;
   LatLng? _draftGeofenceStart;
   LatLng? _draftGeofenceEnd;
+  bool _dismissGpsWaitingOverlay = false;
+  bool _hasCenteredOnGps = false;
 
   DashboardState get state => ref.read(dashboardStateProvider);
   Palette get p => widget.p;
@@ -414,12 +415,31 @@ class ConfigViewState extends ConsumerState<ConfigView> {
     );
   }
 
-  Widget _buildGeofenceEditorCard(BuildContext context) {
+Widget _buildGeofenceEditorCard(BuildContext context) {
     _ensureGeofenceDraftInitialized();
 
     final center = _resolveGeofenceMapCenter();
     final hasDraft = _draftGeofenceStart != null && _draftGeofenceEnd != null;
-    final polylinePoints = <LatLng>[?_draftGeofenceStart, ?_draftGeofenceEnd];
+    final polylinePoints = <LatLng>[
+      if (_draftGeofenceStart != null) _draftGeofenceStart!,
+      if (_draftGeofenceEnd != null) _draftGeofenceEnd!,
+    ];
+
+    // Smart Auto-Centering on GPS Lock
+    final hasGps = state.gpsLocked && state.hasCurrentGpsSample;
+    if (hasGps && !_hasCenteredOnGps) {
+      _hasCenteredOnGps = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _animatedMapMove(
+            LatLng(state.currentGpsLat!, state.currentGpsLon!),
+            17.5,
+          );
+        }
+      });
+    } else if (!hasGps && _hasCenteredOnGps) {
+      _hasCenteredOnGps = false;
+    }
 
     return _settingsCard(
       child: Column(
@@ -444,54 +464,112 @@ class ConfigViewState extends ConsumerState<ConfigView> {
             style: TextStyle(color: p.dimText, fontSize: 10),
           ),
           const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: SizedBox(
-              height: 320,
-              child: FlutterMap(
-                mapController: _geofenceMapController,
-                options: MapOptions(
-                  initialCenter: center,
-                  initialZoom: 17,
-                  onTap: (_, point) => _handleGeofenceMapTap(point),
-                ),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.example.telemetry_dashboard',
-                    maxNativeZoom: 19,
-                    maxZoom: 20,
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _isDrawingGeofence ? p.cyan : p.border,
+                width: 2.0,
+              ),
+              boxShadow: [
+                if (_isDrawingGeofence)
+                  BoxShadow(
+                    color: p.cyan.withValues(alpha: 0.25),
+                    blurRadius: 8.0,
+                    spreadRadius: 2.0,
                   ),
-                  if (polylinePoints.length == 2)
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: polylinePoints,
-                          strokeWidth: 4,
-                          color: p.cyan,
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                height: 320,
+                child: Stack(
+                  children: [
+                    FlutterMap(
+                      mapController: _geofenceMapController,
+                      options: MapOptions(
+                        initialCenter: center,
+                        initialZoom: 17,
+                        onTap: (_, point) => _handleGeofenceMapTap(point),
+                        onPositionChanged: (position, hasGesture) {
+                          setState(() {});
+                        },
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate: state.useLightTheme
+                              ? 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
+                              : 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.example.telemetry_dashboard',
+                          maxNativeZoom: 19,
+                          maxZoom: 20,
+                        ),
+                        if (state.hasCurrentGpsSample)
+                          CircleLayer(
+                            circles: [
+                              CircleMarker(
+                                point: LatLng(state.currentGpsLat!, state.currentGpsLon!),
+                                radius: state.phoneGpsAccuracyM ?? 10.0,
+                                useRadiusInMeter: true,
+                                color: p.cyan.withValues(alpha: 0.12),
+                                borderColor: p.cyan.withValues(alpha: 0.4),
+                                borderStrokeWidth: 1.5,
+                              ),
+                            ],
+                          ),
+                        if (polylinePoints.length == 2)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: polylinePoints,
+                                strokeWidth: 4.0,
+                                color: p.cyan,
+                                borderColor: Colors.white.withValues(alpha: 0.8),
+                                borderStrokeWidth: 1.0,
+                              ),
+                            ],
+                          ),
+                        MarkerLayer(
+                          markers: [
+                            if (state.hasCurrentGpsSample)
+                              Marker(
+                                point: LatLng(state.currentGpsLat!, state.currentGpsLon!),
+                                width: 28,
+                                height: 28,
+                                child: const _PulsingUserLocationMarker(),
+                              ),
+                            if (_draftGeofenceStart != null)
+                              Marker(
+                                point: _draftGeofenceStart!,
+                                width: 26,
+                                height: 26,
+                                child: _buildGeofenceMarker('A', p.green),
+                              ),
+                            if (_draftGeofenceEnd != null)
+                              Marker(
+                                point: _draftGeofenceEnd!,
+                                width: 26,
+                                height: 26,
+                                child: _buildGeofenceMarker('B', p.red),
+                              ),
+                          ],
                         ),
                       ],
                     ),
-                  MarkerLayer(
-                    markers: [
-                      if (_draftGeofenceStart != null)
-                        Marker(
-                          point: _draftGeofenceStart!,
-                          width: 26,
-                          height: 26,
-                          child: _buildGeofenceMarker('A', p.green),
-                        ),
-                      if (_draftGeofenceEnd != null)
-                        Marker(
-                          point: _draftGeofenceEnd!,
-                          width: 26,
-                          height: 26,
-                          child: _buildGeofenceMarker('B', p.orange),
-                        ),
-                    ],
-                  ),
-                ],
+                    Positioned(
+                      bottom: 10,
+                      left: 10,
+                      child: _buildScaleIndicator(),
+                    ),
+                    Positioned(
+                      top: 10,
+                      right: 10,
+                      child: _buildMapFabStack(),
+                    ),
+                    _buildGpsWaitingOverlay(),
+                  ],
+                ),
               ),
             ),
           ),
@@ -505,71 +583,77 @@ class ConfigViewState extends ConsumerState<ConfigView> {
                 ? (state.gpsLocked ? p.lightGreen : p.orange)
                 : p.dimText,
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _buildCmdBtn('SNAP TO CURRENT GPS', () {
-                  _snapDraftLineToCurrentGps(context);
-                }, compact: true),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _buildCmdBtn('RESET TO ACTIVE', () {
-                  setState(() {
-                    _geofenceDraftInitialized = false;
-                    _isDrawingGeofence = false;
-                  });
-                }, compact: true),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildCmdBtn('CLEAR DRAFT', () {
-                  setState(() {
-                    _draftGeofenceStart = null;
-                    _draftGeofenceEnd = null;
-                  });
-                }, compact: true),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildCmdBtn('APPLY LINE', () {
-                  if (!hasDraft) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Place both START and END points before applying geofence.',
-                        ),
-                      ),
-                    );
-                    return;
-                  }
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final buttonWidth = (constraints.maxWidth - 8) / 2;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  SizedBox(
+                    width: buttonWidth,
+                    child: _buildCmdBtn('SNAP TO CURRENT GPS', () {
+                      _snapDraftLineToCurrentGps(context);
+                    }, compact: true),
+                  ),
+                  SizedBox(
+                    width: buttonWidth,
+                    child: _buildCmdBtn('RESET TO ACTIVE', () {
+                      setState(() {
+                        _geofenceDraftInitialized = false;
+                        _isDrawingGeofence = false;
+                        _dismissGpsWaitingOverlay = false;
+                      });
+                    }, compact: true),
+                  ),
+                  SizedBox(
+                    width: buttonWidth,
+                    child: _buildCmdBtn('CLEAR DRAFT', () {
+                      setState(() {
+                        _draftGeofenceStart = null;
+                        _draftGeofenceEnd = null;
+                        _dismissGpsWaitingOverlay = false;
+                      });
+                    }, compact: true),
+                  ),
+                  SizedBox(
+                    width: buttonWidth,
+                    child: _buildCmdBtn('APPLY LINE', () {
+                      if (!hasDraft) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Place both START and END points before applying geofence.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
 
-                  state.configureLapBoundary(
-                    start: GeoPoint(
-                      lat: _draftGeofenceStart!.latitude,
-                      lon: _draftGeofenceStart!.longitude,
-                    ),
-                    end: GeoPoint(
-                      lat: _draftGeofenceEnd!.latitude,
-                      lon: _draftGeofenceEnd!.longitude,
-                    ),
-                  );
-                  setState(() {
-                    _isDrawingGeofence = false;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Lap crossing geofence updated.'),
-                    ),
-                  );
-                }, compact: true),
-              ),
-            ],
+                      state.configureLapBoundary(
+                        start: GeoPoint(
+                          lat: _draftGeofenceStart!.latitude,
+                          lon: _draftGeofenceStart!.longitude,
+                        ),
+                        end: GeoPoint(
+                          lat: _draftGeofenceEnd!.latitude,
+                          lon: _draftGeofenceEnd!.longitude,
+                        ),
+                      );
+                      setState(() {
+                        _isDrawingGeofence = false;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Lap crossing geofence updated.'),
+                        ),
+                      );
+                    }, compact: true),
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -730,7 +814,7 @@ class ConfigViewState extends ConsumerState<ConfigView> {
   }
 
   bool _isDefaultZeroPoint(LatLng point) {
-    return point.latitude.abs() < 0.000001 && point.longitude.abs() < 0.000001;
+    return point.latitude.abs() < 0.001 && point.longitude.abs() < 0.001;
   }
 
   LatLng _resolveGeofenceMapCenter() {
@@ -748,7 +832,275 @@ class ConfigViewState extends ConsumerState<ConfigView> {
       return _draftGeofenceEnd!;
     }
 
+    if (state.lastKnownLat != null && state.lastKnownLon != null) {
+      return LatLng(state.lastKnownLat!, state.lastKnownLon!);
+    }
+
     return const LatLng(14.5660, 120.9920);
+  }
+
+  void _animatedMapMove(LatLng destCenter, double destZoom) {
+    if (!mounted) return;
+    double startLat;
+    double startLon;
+    double startZoom;
+    try {
+      startLat = _geofenceMapController.camera.center.latitude;
+      startLon = _geofenceMapController.camera.center.longitude;
+      startZoom = _geofenceMapController.camera.zoom;
+    } catch (_) {
+      startLat = destCenter.latitude;
+      startLon = destCenter.longitude;
+      startZoom = destZoom;
+    }
+
+    final controller = AnimationController(
+      duration: const Duration(milliseconds: 500),
+      vsync: this,
+    );
+
+    final latTween = Tween<double>(begin: startLat, end: destCenter.latitude);
+    final lonTween = Tween<double>(begin: startLon, end: destCenter.longitude);
+    final zoomTween = Tween<double>(begin: startZoom, end: destZoom);
+
+    controller.addListener(() {
+      if (!mounted) return;
+      _geofenceMapController.move(
+        LatLng(latTween.evaluate(controller), lonTween.evaluate(controller)),
+        zoomTween.evaluate(controller),
+      );
+    });
+
+    controller.forward().then((_) => controller.dispose());
+  }
+
+  void _zoomIn() {
+    if (!mounted) return;
+    double currentZoom;
+    LatLng center;
+    try {
+      currentZoom = _geofenceMapController.camera.zoom;
+      center = _geofenceMapController.camera.center;
+    } catch (_) {
+      return;
+    }
+    final newZoom = (currentZoom + 1.0).clamp(1.0, 20.0);
+    _animatedMapMove(center, newZoom);
+  }
+
+  void _zoomOut() {
+    if (!mounted) return;
+    double currentZoom;
+    LatLng center;
+    try {
+      currentZoom = _geofenceMapController.camera.zoom;
+      center = _geofenceMapController.camera.center;
+    } catch (_) {
+      return;
+    }
+    final newZoom = (currentZoom - 1.0).clamp(1.0, 20.0);
+    _animatedMapMove(center, newZoom);
+  }
+
+  void _recenterOnGps() {
+    if (state.hasCurrentGpsSample) {
+      final target = LatLng(state.currentGpsLat!, state.currentGpsLon!);
+      _animatedMapMove(target, 17.5);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No GPS location available to center.')),
+      );
+    }
+  }
+
+  Widget _buildScaleIndicator() {
+    if (!mounted) {
+      return const SizedBox.shrink();
+    }
+    MapCamera camera;
+    try {
+      camera = _geofenceMapController.camera;
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    final lat = camera.center.latitude;
+    final zoom = camera.zoom;
+
+    final metersPerPixel = (156543.03392 * cos(lat * pi / 180.0)) / pow(2.0, zoom);
+
+    const distances = [
+      1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000
+    ];
+
+    double bestDistance = 50.0;
+    double bestWidth = 50.0;
+    for (final d in distances) {
+      final width = d / metersPerPixel;
+      if (width >= 45.0) {
+        bestDistance = d.toDouble();
+        bestWidth = width;
+        break;
+      }
+    }
+
+    final label = bestDistance >= 1000.0
+        ? '${(bestDistance / 1000.0).toStringAsFixed(0)} km'
+        : '${bestDistance.toStringAsFixed(0)} m';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: p.border.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: p.cyan,
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            width: bestWidth,
+            height: 3,
+            decoration: BoxDecoration(
+              color: p.cyan,
+              borderRadius: BorderRadius.circular(1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapFabStack() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: p.border.withValues(alpha: 0.5), width: 1),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildMapFabIcon(
+            icon: Icons.add_rounded,
+            tooltip: 'Zoom In',
+            onTap: _zoomIn,
+          ),
+          Divider(color: p.border.withValues(alpha: 0.5), height: 1),
+          _buildMapFabIcon(
+            icon: Icons.remove_rounded,
+            tooltip: 'Zoom Out',
+            onTap: _zoomOut,
+          ),
+          Divider(color: p.border.withValues(alpha: 0.5), height: 1),
+          _buildMapFabIcon(
+            icon: Icons.my_location_rounded,
+            tooltip: 'Recenter on Me',
+            color: state.hasCurrentGpsSample ? p.cyan : p.dimText,
+            onTap: state.hasCurrentGpsSample ? _recenterOnGps : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapFabIcon({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+    Color? color,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
+          child: Icon(
+            icon,
+            size: 20,
+            color: color ?? (onTap == null ? p.dimText : p.mainText),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGpsWaitingOverlay() {
+    final showOverlay = !state.gpsLocked &&
+        _draftGeofenceStart == null &&
+        _draftGeofenceEnd == null &&
+        !_dismissGpsWaitingOverlay;
+
+    if (!showOverlay) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.7),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: p.cyan,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Waiting for GPS fix...',
+              style: TextStyle(
+                color: p.mainText,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _dismissGpsWaitingOverlay = true;
+                });
+              },
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  border: Border.all(color: p.border),
+                  borderRadius: BorderRadius.circular(6),
+                  color: const Color(0xFF181818),
+                ),
+                child: Text(
+                  'Manual Pan & Draw',
+                  style: TextStyle(
+                    color: p.cyan,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String _formatLatLng(LatLng? point) {
@@ -1547,6 +1899,85 @@ class ConfigViewState extends ConsumerState<ConfigView> {
                 ),
                 const SizedBox(height: 12),
                 Text(
+                  'GRAPH Y-AXIS RANGE',
+                  style: TextStyle(
+                    color: p.dimText,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 10,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: state.graphYMin.toStringAsFixed(0),
+                        style: TextStyle(
+                          color: p.cyan,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: 'MIN',
+                          labelStyle: TextStyle(color: p.dimText, fontSize: 10),
+                          filled: true,
+                          fillColor: p.light
+                              ? Colors.grey.shade200
+                              : Colors.black,
+                          contentPadding: const EdgeInsets.all(8),
+                          border: OutlineInputBorder(
+                            borderSide: BorderSide(color: p.border),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(color: p.border),
+                          ),
+                        ),
+                        keyboardType: TextInputType.number,
+                        onChanged: (val) {
+                          final v = double.tryParse(val);
+                          if (v != null) {
+                            state.updateGraphYRange(v, state.graphYMax);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: state.graphYMax.toStringAsFixed(0),
+                        style: TextStyle(
+                          color: p.cyan,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: 'MAX',
+                          labelStyle: TextStyle(color: p.dimText, fontSize: 10),
+                          filled: true,
+                          fillColor: p.light
+                              ? Colors.grey.shade200
+                              : Colors.black,
+                          contentPadding: const EdgeInsets.all(8),
+                          border: OutlineInputBorder(
+                            borderSide: BorderSide(color: p.border),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(color: p.border),
+                          ),
+                        ),
+                        keyboardType: TextInputType.number,
+                        onChanged: (val) {
+                          final v = double.tryParse(val);
+                          if (v != null) {
+                            state.updateGraphYRange(state.graphYMin, v);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
                   'SPEED BAR THRESHOLDS',
                   style: TextStyle(
                     color: p.dimText,
@@ -1941,6 +2372,71 @@ class ConfigViewState extends ConsumerState<ConfigView> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PulsingUserLocationMarker extends StatefulWidget {
+  const _PulsingUserLocationMarker();
+
+  @override
+  State<_PulsingUserLocationMarker> createState() => _PulsingUserLocationMarkerState();
+}
+
+class _PulsingUserLocationMarkerState extends State<_PulsingUserLocationMarker>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, child) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 24.0 * _pulseController.value,
+              height: 24.0 * _pulseController.value,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue.withValues(alpha: 0.6 * (1.0 - _pulseController.value)),
+              ),
+            ),
+            Container(
+              width: 12.0,
+              height: 12.0,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue,
+              ),
+            ),
+            Container(
+              width: 14.0,
+              height: 14.0,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

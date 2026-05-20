@@ -1,19 +1,13 @@
-import 'package:telemetry_dashboard/ui/widgets/common/painters.dart';
 import 'package:telemetry_dashboard/ui/widgets/driver/efficiency_grid.dart';
 import 'package:telemetry_dashboard/ui/widgets/service/config_view.dart';
 import 'dart:async';
 import 'dart:ui';
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:latlong2/latlong.dart' hide Path;
-import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
 import 'package:telemetry_dashboard/providers/app_providers.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
 
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 
@@ -708,108 +702,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          GestureDetector(
-                            onTap: () => _handleStartStop(context, state),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              padding: EdgeInsets.symmetric(
-                                horizontal: isTight ? 8 : 12,
-                                vertical: isTight ? 3 : 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: state.isLogging
-                                    ? p.red.withValues(alpha: 0.2)
-                                    : p.green.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: state.isLogging ? p.red : p.green,
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  if (state.isLogging)
-                                    BoxShadow(
-                                      color: p.red.withValues(alpha: 0.4),
-                                      blurRadius: 8,
-                                      spreadRadius: 1,
-                                    ),
-                                ],
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    state.isLogging
-                                        ? Icons.stop
-                                        : Icons.play_arrow,
-                                    color: state.isLogging ? p.red : p.green,
-                                    size: isTight ? 14 : 16,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    state.isLogging ? 'STOP' : 'START',
-                                    style: TextStyle(
-                                      color: state.isLogging ? p.red : p.green,
-                                      fontSize: isTight ? 11 : 12,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: 1.1,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          if (!isTight) ...[
-                            Text(
-                              'LOCAL',
-                              style: TextStyle(
-                                color: p.dimText,
-                                fontSize: statusFontSize,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                          ],
-                          _buildModeNavButton(
-                            label: 'DRV',
-                            active: _selectedPage == 0,
-                            activeColor: p.cyan,
-                            p: p,
-                            width: navButtonWidth,
-                            height: navButtonHeight,
-                            fontSize: navButtonFontSize,
-                            onTap: () {
-                              unawaited(_setPage(state: state, pageIndex: 0));
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          _buildModeNavButton(
-                            label: 'CFG',
-                            active: _selectedPage == 1,
-                            activeColor: p.lightGreen,
-                            p: p,
-                            width: navButtonWidth,
-                            height: navButtonHeight,
-                            fontSize: navButtonFontSize,
-                            onTap: () {
-                              unawaited(
-                                _handleServicePageTap(
-                                  state: state,
-                                  pageIndex: 1,
-                                ),
-                              );
-                            },
-                            onLongPress: () {
-                              unawaited(
-                                _handleServicePageLongPress(
-                                  state: state,
-                                  pageIndex: 1,
-                                ),
-                              );
-                            },
-                          ),
                           if (!isCompact && !isVeryTight) ...[
-                            const SizedBox(width: 12),
                             Text(
                               state.systemTimeString,
                               style: TextStyle(
@@ -822,8 +715,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            const SizedBox(width: 12),
                           ],
-                          SizedBox(width: isCompact ? 12 : 18),
+                          SizedBox(width: isCompact ? 6 : 10),
                           Icon(sourceIcon, color: sourceColor, size: 10),
                           const SizedBox(width: 4),
                           Text(
@@ -898,6 +792,118 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                               ),
                             ),
                           ],
+                          const SizedBox(width: 10),
+                          if (!isTight) ...[
+                            Text(
+                              'LOCAL',
+                              style: TextStyle(
+                                color: p.dimText,
+                                fontSize: statusFontSize,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ],
+                          _buildModeNavButton(
+                            label: 'DRV',
+                            active: _selectedPage == 0,
+                            activeColor: p.cyan,
+                            p: p,
+                            width: navButtonWidth,
+                            height: navButtonHeight,
+                            fontSize: navButtonFontSize,
+                            onTap: () {
+                              unawaited(_setPage(state: state, pageIndex: 0));
+                            },
+                          ),
+                          const SizedBox(width: 4),
+                          _buildModeNavButton(
+                            label: 'CFG',
+                            active: _selectedPage == 1,
+                            activeColor: p.lightGreen,
+                            p: p,
+                            width: navButtonWidth,
+                            height: navButtonHeight,
+                            fontSize: navButtonFontSize,
+                            onTap: () {
+                              unawaited(
+                                _handleServicePageTap(
+                                  state: state,
+                                  pageIndex: 1,
+                                ),
+                              );
+                            },
+                            onLongPress: () {
+                              unawaited(
+                                _handleServicePageLongPress(
+                                  state: state,
+                                  pageIndex: 1,
+                                ),
+                              );
+                            },
+                          ),
+                          // Vertical separator — safe zone boundary
+                          const SizedBox(width: 10),
+                          Container(width: 1, height: topBarHeight * 0.6, color: p.border),
+                          const SizedBox(width: 10),
+                          // START/STOP anchored to far right
+                          GestureDetector(
+                            // STOP = tap (urgent), START = long-press (deliberate)
+                            onTap: state.isLogging
+                                ? () => _handleStartStop(context, state)
+                                : null,
+                            onLongPress: state.isLogging
+                                ? null
+                                : () => _handleStartStop(context, state),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: EdgeInsets.symmetric(
+                                horizontal: isTight ? 14 : 20,
+                                vertical: isTight ? 4 : 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: state.isLogging
+                                    ? p.red.withValues(alpha: 0.2)
+                                    : p.green.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: state.isLogging ? p.red : p.green,
+                                  width: 1.5,
+                                ),
+                                boxShadow: [
+                                  if (state.isLogging)
+                                    BoxShadow(
+                                      color: p.red.withValues(alpha: 0.4),
+                                      blurRadius: 8,
+                                      spreadRadius: 1,
+                                    ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    state.isLogging
+                                        ? Icons.stop
+                                        : Icons.play_arrow,
+                                    color: state.isLogging ? p.red : p.green,
+                                    size: isTight ? 14 : 16,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    state.isLogging ? 'STOP' : 'HOLD',
+                                    style: TextStyle(
+                                      color: state.isLogging ? p.red : p.green,
+                                      fontSize: isTight ? 11 : 12,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 1.1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
                         ],
                       ),
                     ),
@@ -977,5 +983,3 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 }
-
-

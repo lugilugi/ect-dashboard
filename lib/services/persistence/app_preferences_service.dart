@@ -26,6 +26,8 @@ class AppPreferencesService {
       'prefs.alert_critical_repeat_count';
   static const String _kAlertCriticalRepeatIntervalMs =
       'prefs.alert_critical_repeat_interval_ms';
+  static const String _kLastKnownLat = 'prefs.last_known_lat';
+  static const String _kLastKnownLon = 'prefs.last_known_lon';
 
   String buildStateSignature(DashboardState state) {
     return <Object?>[
@@ -138,6 +140,13 @@ class AppPreferencesService {
     if (alertCriticalRepeatIntervalMs != null) {
       state.setAlertCriticalRepeatIntervalMs(alertCriticalRepeatIntervalMs);
     }
+
+    final lastLat = prefs.getDouble(_kLastKnownLat);
+    final lastLon = prefs.getDouble(_kLastKnownLon);
+    if (lastLat != null && lastLon != null) {
+      state.lastKnownLat = lastLat;
+      state.lastKnownLon = lastLon;
+    }
   }
 
   Future<void> saveFromState(DashboardState state) async {
@@ -175,5 +184,11 @@ class AppPreferencesService {
       _kAlertCriticalRepeatIntervalMs,
       state.alertCriticalRepeatIntervalMs,
     );
+    if (state.lastKnownLat != null) {
+      await prefs.setDouble(_kLastKnownLat, state.lastKnownLat!);
+    }
+    if (state.lastKnownLon != null) {
+      await prefs.setDouble(_kLastKnownLon, state.lastKnownLon!);
+    }
   }
 }

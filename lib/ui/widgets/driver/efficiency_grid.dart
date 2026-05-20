@@ -1,15 +1,16 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
-import 'package:telemetry_dashboard/ui/widgets/common/painters.dart';
+
 // =============================================================================
 // PAGE 1: EFFICIENCY GRID (Driver View)
 // =============================================================================
 class EfficiencyGrid extends StatelessWidget {
   final DashboardState state;
   final Palette p;
-  const EfficiencyGrid({required this.state, required this.p});
+  const EfficiencyGrid({super.key, required this.state, required this.p});
 
   @override
   Widget build(BuildContext context) {
@@ -42,9 +43,12 @@ class EfficiencyGrid extends StatelessWidget {
                       Expanded(
                         child: _buildSplitCell(
                           "VOLTAGE / CURRENT",
-                          state.mainVoltage.toStringAsFixed(1),
+                          state.mainVoltage.toStringAsFixed(1).padLeft(4, '0'),
                           "V",
-                          state.current780.toStringAsFixed(1),
+                          max(
+                            0,
+                            state.current780,
+                          ).toStringAsFixed(1).padLeft(4, '0'),
                           "A",
                           bottomBorder: true,
                           rightBorder: true,
@@ -55,7 +59,7 @@ class EfficiencyGrid extends StatelessWidget {
                       Expanded(
                         child: _buildGridCell(
                           "POWER",
-                          powerW.toStringAsFixed(0),
+                          powerW.toStringAsFixed(0).padLeft(4, '0'),
                           "W",
                           bottomBorder: true,
                           rightBorder: true,
@@ -112,9 +116,11 @@ class EfficiencyGrid extends StatelessWidget {
                       Expanded(
                         child: _buildSplitCell(
                           "AVG EFF. / ENERGY",
-                          state.avgKmPerKwh.toStringAsFixed(2),
+                          state.avgKmPerKwh.toStringAsFixed(1).padLeft(5, '0'),
                           "km/kWh",
-                          (state.energyJ780 / 3600.0).toStringAsFixed(1),
+                          (state.energyJ780 / 3600.0)
+                              .toStringAsFixed(1)
+                              .padLeft(5, '0'),
                           "Wh",
                           leftBorder: true,
                           bottomBorder: true,
@@ -139,21 +145,10 @@ class EfficiencyGrid extends StatelessWidget {
   // Speed Bar Graph (center hero)
   // ---------------------------------------------------------------------------
   Widget _buildSpeedBarGraph() {
-    final fraction =
-        (state.speedKmh / max(state.speedUpperThreshold * 1.5, 1.0)).clamp(
-          0.0,
-          1.0,
-        );
-    final upperFrac =
-        (state.speedUpperThreshold / (state.speedUpperThreshold * 1.5)).clamp(
-          0.0,
-          1.0,
-        );
-    final lowerFrac =
-        (state.speedLowerThreshold / (state.speedUpperThreshold * 1.5)).clamp(
-          0.0,
-          1.0,
-        );
+    final double maxSpeed = 50.0;
+    final fraction = (state.speedKmh / maxSpeed).clamp(0.0, 1.0);
+    final upperFrac = (state.speedUpperThreshold / maxSpeed).clamp(0.0, 1.0);
+    final lowerFrac = (state.speedLowerThreshold / maxSpeed).clamp(0.0, 1.0);
 
     Color barColor;
     if (state.speedKmh >= state.speedUpperThreshold) {
@@ -248,31 +243,45 @@ class EfficiencyGrid extends StatelessWidget {
                   Center(
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            state.speedKmh.toStringAsFixed(1),
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                              color: p.mainText,
-                              fontSize: 80,
-                              fontWeight: FontWeight.bold,
-                              height: 1.0,
-                            ),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: p.barBg.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: p.border.withValues(alpha: 0.5),
+                            width: 1,
                           ),
-                          Text(
-                            "km/h",
-                            style: TextStyle(
-                              color: p.dimText,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              state.speedKmh.toStringAsFixed(1).padLeft(4, '0'),
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                                color: p.mainText,
+                                fontSize: 80,
+                                fontWeight: FontWeight.bold,
+                                height: 1.0,
+                              ),
                             ),
-                          ),
-                        ],
+                            Text(
+                              "km/h",
+                              style: TextStyle(
+                                color: p.dimText,
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -418,10 +427,94 @@ class EfficiencyGrid extends StatelessWidget {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(4.0),
-              child: CustomPaint(
-                painter: GraphPainter(state.graphHistory.toList(), p),
-                size: Size.infinite,
-              ),
+              child: _buildFlChartGraph(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFlChartGraph() {
+    final data = state.graphHistory.toList();
+    if (data.length < 2) return const SizedBox();
+
+    final double gMin = state.graphYMin;
+    final double gMax = state.graphYMax;
+    final range = gMax - gMin == 0 ? 1.0 : gMax - gMin;
+
+    final spots = <FlSpot>[];
+    for (int i = 0; i < data.length; i++) {
+      spots.add(FlSpot(i.toDouble(), data[i]));
+    }
+
+    // Fixed color as requested
+    Color lineColor = p.cyan;
+
+    return LineChart(
+      LineChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: true,
+          horizontalInterval: max(range / 4, 1.0),
+          getDrawingHorizontalLine: (value) {
+            return FlLine(
+              color: p.border.withValues(alpha: 0.5),
+              strokeWidth: 1,
+            );
+          },
+          getDrawingVerticalLine: (value) {
+            return FlLine(
+              color: p.border.withValues(alpha: 0.5),
+              strokeWidth: 1,
+            );
+          },
+        ),
+        titlesData: FlTitlesData(
+          show: true,
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          bottomTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              interval: max(range / 2, 1.0),
+              reservedSize: 32,
+              getTitlesWidget: (value, meta) {
+                return Text(
+                  value.toStringAsFixed(0),
+                  style: TextStyle(
+                    color: p.dimText,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        minX: 0,
+        maxX: (data.length - 1).toDouble(),
+        minY: gMin,
+        maxY: gMax,
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: lineColor,
+            barWidth: 2,
+            isStrokeCapRound: true,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              color: lineColor.withValues(alpha: 0.2),
             ),
           ),
         ],
@@ -484,10 +577,11 @@ class EfficiencyGrid extends StatelessWidget {
           Container(width: 1, color: p.border),
           Container(
             width: 80,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 16),
+            alignment: Alignment.center,
             child: Text(
-              "${state.throttlePercent.toStringAsFixed(0)}%",
+              state.throttlePercent >= 100
+                  ? "MAX"
+                  : "${state.throttlePercent.toStringAsFixed(0).padLeft(2, '0')}%",
               style: TextStyle(
                 fontFamily: 'monospace',
                 fontFeatures: const [FontFeature.tabularFigures()],
@@ -771,7 +865,9 @@ class EfficiencyGrid extends StatelessWidget {
                       Text(
                         state.instKmPerKwh > 90.0
                             ? "MAX"
-                            : state.instKmPerKwh.toStringAsFixed(2),
+                            : state.instKmPerKwh
+                                  .toStringAsFixed(1)
+                                  .padLeft(5, '0'),
                         style: TextStyle(
                           fontFamily: 'monospace',
                           fontFeatures: const [FontFeature.tabularFigures()],
@@ -878,5 +974,3 @@ class EfficiencyGrid extends StatelessWidget {
     );
   }
 }
-
-

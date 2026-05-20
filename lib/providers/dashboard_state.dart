@@ -93,6 +93,8 @@ class ConfigStateStore {
   double speedUpperThreshold = 40.0;
   double speedLowerThreshold = 25.0;
   String graphMetric = "speed";
+  double graphYMin = 0.0;
+  double graphYMax = 50.0;
 }
 
 class TelemetryMetricsStore {
@@ -160,6 +162,8 @@ class GpsStateStore {
   DateTime? lastGpsSourceChangedAtUtc;
   double? phoneGpsAccuracyM;
   DateTime lastExternalGpsMessageAt = DateTime.now();
+  double? lastKnownLat;
+  double? lastKnownLon;
 }
 
 class DashboardState extends ChangeNotifier {
@@ -701,6 +705,11 @@ class DashboardState extends ChangeNotifier {
     currentGpsSampleAtUtc = sampleTimestampUtc;
     currentGpsSource = source;
 
+    if (lat.abs() > 0.001 || lon.abs() > 0.001) {
+      _gps.lastKnownLat = lat;
+      _gps.lastKnownLon = lon;
+    }
+
     if (lapDividerMode != LapDividerMode.geofence) {
       return;
     }
@@ -927,6 +936,18 @@ class DashboardState extends ChangeNotifier {
       _gps.lastGpsSourceChangedAtUtc = value;
   double? get phoneGpsAccuracyM => _gps.phoneGpsAccuracyM;
   set phoneGpsAccuracyM(double? value) => _gps.phoneGpsAccuracyM = value;
+  double? get lastKnownLat => _gps.lastKnownLat;
+  set lastKnownLat(double? value) {
+    if (_gps.lastKnownLat == value) return;
+    _gps.lastKnownLat = value;
+    notifyListeners();
+  }
+  double? get lastKnownLon => _gps.lastKnownLon;
+  set lastKnownLon(double? value) {
+    if (_gps.lastKnownLon == value) return;
+    _gps.lastKnownLon = value;
+    notifyListeners();
+  }
   DateTime get _lastExternalGpsMessageAt => _gps.lastExternalGpsMessageAt;
   set _lastExternalGpsMessageAt(DateTime value) =>
       _gps.lastExternalGpsMessageAt = value;
@@ -1013,6 +1034,16 @@ class DashboardState extends ChangeNotifier {
   // Configurable graph
   String get graphMetric => _config.graphMetric;
   set graphMetric(String value) => _config.graphMetric = value;
+  double get graphYMin => _config.graphYMin;
+  double get graphYMax => _config.graphYMax;
+
+  void updateGraphYRange(double min, double max) {
+    if (_config.graphYMin == min && _config.graphYMax == max) return;
+    _config.graphYMin = min;
+    _config.graphYMax = max;
+    notifyListeners();
+  }
+
   Queue<double> get graphHistory => _metrics.graphHistory;
   static const int maxGraphPoints = 100;
 
