@@ -6,13 +6,13 @@ datasources:
     type: postgres
     access: proxy
     url: timescaledb:5432
-    user: grafana
+    user: postgres
     jsonData:
       database: telemetry
       sslmode: disable
       postgresVersion: 1500
       timescaledb: true
     secureJsonData:
-      password: grafana_dev
+      password: postgres
     editable: true
     isDefault: true

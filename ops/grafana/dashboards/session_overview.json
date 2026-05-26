@@ -63,7 +63,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts_wall_utc AS \"time\", metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' ORDER BY ts_wall_utc;",
+          "rawSql": "SELECT time_bucket('$__interval', ts_wall_utc) AS \"time\", avg(metric_value)::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -125,7 +125,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*)::bigint AS backlog_events FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND created_at_utc >= now() - interval '5 minutes';",
+          "rawSql": "SELECT COUNT(*)::bigint AS backlog_events FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND ts_wall_utc >= now() - interval '5 minutes';",
           "refId": "A"
         }
       ],
@@ -201,7 +201,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts_wall_utc, recovered_seq_in_session, checkpoint_seq_in_session, spool_max_seq_in_session, replay_backlog_count, recovery_resume_count FROM telemetry.recovery_events WHERE session_id::text = '${session_id}' ORDER BY ts_wall_utc DESC LIMIT 100;",
+          "rawSql": "SELECT ts_wall_utc, recovered_seq_in_session, checkpoint_seq_in_session, spool_max_seq_in_session, replay_backlog_count, recovery_resume_count FROM telemetry.recovery_events WHERE session_id::text = '${session_id}' AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') ORDER BY ts_wall_utc DESC LIMIT 100;",
           "refId": "A"
         }
       ],
@@ -239,7 +239,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts_wall_utc, command_key, status, retries, reason, command_sequence FROM telemetry.tx_command_audit WHERE session_id::text = '${session_id}' ORDER BY ts_wall_utc DESC LIMIT 200;",
+          "rawSql": "SELECT ts_wall_utc, command_key, status, retries, reason, command_sequence FROM telemetry.tx_command_audit WHERE session_id::text = '${session_id}' AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') ORDER BY ts_wall_utc DESC LIMIT 200;",
           "refId": "A"
         }
       ],
@@ -284,7 +284,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts_wall_utc AS \"time\", metric_key AS metric, metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key IN ('USB_Connected', 'MQTT_Connected') ORDER BY ts_wall_utc;",
+          "rawSql": "SELECT time_bucket('$__interval', ts_wall_utc) AS \"time\", metric_key AS metric, max(metric_value)::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key IN ('USB_Connected', 'MQTT_Connected') AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -329,7 +329,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts_wall_utc AS \"time\", metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'MQTT_Backlog_Count' ORDER BY ts_wall_utc;",
+          "rawSql": "SELECT time_bucket('$__interval', ts_wall_utc) AS \"time\", max(metric_value)::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'MQTT_Backlog_Count' AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -374,7 +374,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT date_trunc('second', ts_wall_utc) AS \"time\", source AS metric, COUNT(*)::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND source IN ('external_gps', 'phone_gps') AND metric_key IN ('GPS_Locked', 'GPS_Speed_Kmh', 'GPS_Latitude_Deg') GROUP BY 1, 2 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', ts_wall_utc) AS \"time\", source AS metric, COUNT(*)::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND source IN ('external_gps', 'phone_gps') AND metric_key IN ('GPS_Locked', 'GPS_Speed_Kmh', 'GPS_Latitude_Deg') AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -419,7 +419,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT date_trunc('minute', ts_wall_utc) AS \"time\", status AS metric, COUNT(*)::double precision AS value FROM telemetry.tx_command_audit WHERE session_id::text = '${session_id}' GROUP BY 1, 2 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', ts_wall_utc) AS \"time\", status AS metric, COUNT(*)::double precision AS value FROM telemetry.tx_command_audit WHERE session_id::text = '${session_id}' AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -427,7 +427,7 @@
       "type": "timeseries"
     }
   ],
-  "refresh": "10s",
+  "refresh": "2s",
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
