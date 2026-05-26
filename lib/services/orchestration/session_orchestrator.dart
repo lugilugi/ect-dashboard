@@ -80,6 +80,7 @@ class SessionOrchestrator {
     required SessionControlState control,
     required double speedKmh,
     required DateTime nowUtc,
+    bool isSimulated = false,
   }) {
     final gateStatus = evaluateStartGate(speedKmh: speedKmh, nowUtc: nowUtc);
 
@@ -93,7 +94,7 @@ class SessionOrchestrator {
       );
     }
 
-    if (!gateStatus.ready) {
+    if (!gateStatus.ready && !isSimulated) {
       return SessionTransitionDecision(
         accepted: false,
         reason: 'Start blocked until standstill hold window is satisfied.',

@@ -197,69 +197,71 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ),
             ],
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // RUN NAME INPUT
-              TextField(
-                controller: nameController,
-                autofocus: true,
-                style: TextStyle(
-                  color: p.cyan,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.bold,
-                ),
-                decoration: InputDecoration(
-                  labelText: "RUN NAME",
-                  labelStyle: const TextStyle(
-                    color: Colors.white38,
-                    fontSize: 10,
-                    letterSpacing: 1.2,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // RUN NAME INPUT
+                TextField(
+                  controller: nameController,
+                  autofocus: true,
+                  style: TextStyle(
+                    color: p.cyan,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
                   ),
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: p.border),
+                  decoration: InputDecoration(
+                    labelText: "RUN NAME",
+                    labelStyle: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10,
+                      letterSpacing: 1.2,
+                    ),
+                    enabledBorder: UnderlineInputBorder(
+                      borderSide: BorderSide(color: p.border),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
+                const SizedBox(height: 20),
 
-              // MQTT DESTINATION INPUT (The Safeguard)
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.03),
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: Colors.white10),
+                // MQTT DESTINATION INPUT (The Safeguard)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.03),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "TARGET DESTINATION (MQTT HOST)",
+                        style: TextStyle(
+                          color: Colors.white38,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      TextField(
+                        controller: hostController,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontFamily: 'monospace',
+                          fontSize: 13,
+                        ),
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          hintText: "e.g. 100.x.x.x or pitwall-laptop",
+                          hintStyle: TextStyle(color: Colors.white10),
+                          border: InputBorder.none,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "TARGET DESTINATION (MQTT HOST)",
-                      style: TextStyle(
-                        color: Colors.white38,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    TextField(
-                      controller: hostController,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                      ),
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        hintText: "e.g. 100.x.x.x or pitwall-laptop",
-                        hintStyle: TextStyle(color: Colors.white10),
-                        border: InputBorder.none,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
           actions: [
             TextButton(

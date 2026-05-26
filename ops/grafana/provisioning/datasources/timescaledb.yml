@@ -5,14 +5,14 @@ datasources:
     uid: timescaledb
     type: postgres
     access: proxy
-    url: 127.0.0.1:5432
-    user: telegraf
+    url: timescaledb:5432
+    user: grafana
     jsonData:
       database: telemetry
       sslmode: disable
       postgresVersion: 1500
       timescaledb: true
     secureJsonData:
-      password: CHANGE_ME
+      password: grafana_dev
     editable: true
     isDefault: true

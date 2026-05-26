@@ -506,6 +506,7 @@ class DashboardState extends ChangeNotifier {
       control: sessionControlState,
       speedKmh: speedKmh,
       nowUtc: DateTime.now().toUtc(),
+      isSimulated: isSimulated,
     );
     _updateStartGateFromDecision(decision.startGateStatus);
 

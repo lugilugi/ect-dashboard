@@ -59,6 +59,28 @@ void main() {
       expect(decision.nextControl.lapPhase, LapPhase.running);
     });
 
+    test('allows start without satisfying standstill hold if isSimulated is true', () {
+      final orchestrator = SessionOrchestrator(
+        standstillThresholdKmh: 0.5,
+        standstillHold: const Duration(milliseconds: 800),
+      );
+
+      final base = DateTime.now().toUtc();
+      final armed = orchestrator.arm(control: _baseControl());
+
+      // Vehicle is moving, standstill hold is not satisfied
+      final decision = orchestrator.requestStart(
+        control: armed,
+        speedKmh: 2.0,
+        nowUtc: base,
+        isSimulated: true,
+      );
+
+      expect(decision.accepted, isTrue);
+      expect(decision.nextControl.sessionState, SessionState.logging);
+      expect(decision.nextControl.lapPhase, LapPhase.running);
+    });
+
     test('allows normal stop from logging state', () {
       final orchestrator = SessionOrchestrator();
       final control = _baseControl(
