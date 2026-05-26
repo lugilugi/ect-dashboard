@@ -6,6 +6,7 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:uuid/uuid.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
+import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/models/telemetry/telemetry_event.dart';
 import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
 import 'package:telemetry_dashboard/services/transport/mqtt_payload_contract.dart';
@@ -114,6 +115,13 @@ class MqttService {
   Timer? _flushTimer;
   bool _isFlushingCanonicalBuffer = false;
 
+  String? _lastSentSessionId;
+  String? _lastSentSessionName;
+  SessionState? _lastSentSessionState;
+  UiMode? _lastSentUiMode;
+  int? _lastSentLapsCompleted;
+  int? _lastSentCrossingDeadzoneMs;
+
   static const int maxPendingPublishes = 2000;
   static const int maxBatchEvents = 32;
   static const int maxBatchPayloadBytes = 32 * 1024;
@@ -142,7 +150,54 @@ class MqttService {
     _setupCallbacks();
   }
 
+  void publishSessionMetadata() {
+    final sessionId = state.sessionId;
+    if (sessionId.isEmpty) return;
+
+    final sessionName = state.sessionName;
+    final sessionState = state.sessionState;
+    final uiMode = state.uiMode;
+    final lapsCompleted = state.lapsCompleted;
+    final crossingDeadzoneMs = state.crossingDeadzoneMs;
+
+    if (_lastSentSessionId == sessionId &&
+        _lastSentSessionName == sessionName &&
+        _lastSentSessionState == sessionState &&
+        _lastSentUiMode == uiMode &&
+        _lastSentLapsCompleted == lapsCompleted &&
+        _lastSentCrossingDeadzoneMs == crossingDeadzoneMs) {
+      return;
+    }
+
+    _lastSentSessionId = sessionId;
+    _lastSentSessionName = sessionName;
+    _lastSentSessionState = sessionState;
+    _lastSentUiMode = uiMode;
+    _lastSentLapsCompleted = lapsCompleted;
+    _lastSentCrossingDeadzoneMs = crossingDeadzoneMs;
+
+    final payload = {
+      'session_id': sessionId,
+      'session_name': sessionName,
+      'session_state': sessionState.wireValue,
+      'ui_mode': uiMode.wireValue,
+      'laps_completed': lapsCompleted,
+      'crossing_deadzone_ms': crossingDeadzoneMs,
+    };
+
+    unawaited(
+      _publishOrQueue(
+        topic: 'telemetry/eco_archers/sessions',
+        payloadJson: jsonEncode(payload),
+      ),
+    );
+  }
+
   Future<void> start() async {
+    state.removeListener(publishSessionMetadata);
+    state.addListener(publishSessionMetadata);
+    publishSessionMetadata();
+
     await _localSpoolService.initialize();
     await _localSpoolService.prunePublishedOlderThan(const Duration(days: 7));
     await _localSpoolService.prunePublishedDecodedEventsOlderThan(
@@ -174,6 +229,7 @@ class MqttService {
   }
 
   void stop() {
+    state.removeListener(publishSessionMetadata);
     unawaited(_flushCanonicalEventBuffer(drainAll: true));
     _flushTimer?.cancel();
     _flushTimer = null;
@@ -316,7 +372,9 @@ class MqttService {
   bool _publishDirect({required String topic, required String payloadJson}) {
     try {
       final sent = _transport.publish(topic: topic, payloadJson: payloadJson);
-      if (!sent) {
+      if (sent) {
+        state.notifyMqttTxSuccess();
+      } else {
         debugPrint('MQTT publish failed, buffering payload.');
       }
       return sent;

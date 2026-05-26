@@ -181,6 +181,20 @@ class DashboardState extends ChangeNotifier {
   final TelemetryMetricsStore _metrics = TelemetryMetricsStore();
   final GpsStateStore _gps = GpsStateStore();
 
+  bool _isMqttTransmitting = false;
+  bool get isMqttTransmitting => _isMqttTransmitting;
+  Timer? _mqttTxTimer;
+
+  void notifyMqttTxSuccess() {
+    _isMqttTransmitting = true;
+    notifyListeners();
+    _mqttTxTimer?.cancel();
+    _mqttTxTimer = Timer(const Duration(milliseconds: 300), () {
+      _isMqttTransmitting = false;
+      notifyListeners();
+    });
+  }
+
   SpoolHealthStore get spoolHealth => _spoolHealth;
   SessionControlStore get sessionControl => _sessionControl;
   AlertStateStore get alerts => _alerts;

@@ -182,6 +182,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         context: context,
         barrierDismissible: false, // Force a decision
         builder: (context) => AlertDialog(
+          scrollable: true,
           backgroundColor: const Color(0xFF121212),
           title: Row(
             children: [
@@ -197,11 +198,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ),
             ],
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // RUN NAME INPUT
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // RUN NAME INPUT
                 TextField(
                   controller: nameController,
                   autofocus: true,
@@ -262,7 +262,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 ),
               ],
             ),
-          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -716,6 +715,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             ),
                           ),
                           const SizedBox(width: 10),
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: state.isMqttTransmitting ? p.green : Colors.transparent,
+                              boxShadow: state.isMqttTransmitting ? [
+                                BoxShadow(
+                                  color: p.green.withValues(alpha: 0.5),
+                                  blurRadius: 4,
+                                  spreadRadius: 1,
+                                )
+                              ] : null,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
                           Text(
                             'Q:${state.unsentBatchCount}',
                             style: TextStyle(

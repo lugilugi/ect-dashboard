@@ -142,3 +142,52 @@ SELECT create_hypertable(
   'ts_wall_utc',
   if_not_exists => TRUE
 );
+
+-- Writable view for session metadata ingestion
+CREATE OR REPLACE VIEW telemetry.sessions_ingest_view AS
+SELECT
+  session_id,
+  session_name,
+  session_state,
+  ui_mode,
+  laps_completed,
+  crossing_deadzone_ms
+FROM telemetry.sessions;
+
+-- Trigger function for upserting session metadata
+CREATE OR REPLACE FUNCTION telemetry.upsert_session_ingest()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO telemetry.sessions (
+    session_id,
+    session_name,
+    session_state,
+    ui_mode,
+    laps_completed,
+    crossing_deadzone_ms
+  )
+  VALUES (
+    NEW.session_id,
+    COALESCE(NEW.session_name, 'UNKNOWN_SESSION'),
+    COALESCE(NEW.session_state, 'IDLE'),
+    COALESCE(NEW.ui_mode, 'DRIVER'),
+    COALESCE(NEW.laps_completed, 0),
+    COALESCE(NEW.crossing_deadzone_ms, 3000)
+  )
+  ON CONFLICT (session_id)
+  DO UPDATE SET
+    session_name = COALESCE(EXCLUDED.session_name, sessions.session_name),
+    session_state = COALESCE(EXCLUDED.session_state, sessions.session_state),
+    ui_mode = COALESCE(EXCLUDED.ui_mode, sessions.ui_mode),
+    laps_completed = COALESCE(EXCLUDED.laps_completed, sessions.laps_completed),
+    crossing_deadzone_ms = COALESCE(EXCLUDED.crossing_deadzone_ms, sessions.crossing_deadzone_ms);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Bind trigger to view
+DROP TRIGGER IF EXISTS trigger_upsert_session_ingest ON telemetry.sessions_ingest_view;
+CREATE TRIGGER trigger_upsert_session_ingest
+INSTEAD OF INSERT ON telemetry.sessions_ingest_view
+FOR EACH ROW
+EXECUTE FUNCTION telemetry.upsert_session_ingest();

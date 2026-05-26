@@ -2,9 +2,7 @@ version: '3.9'
 
 services:
   timescaledb:
-    build:
-      context: ../..
-      dockerfile: ops/local-stack/timescaledb/Dockerfile
+    image: timescale/timescaledb:2.17.2-pg16
     container_name: ect-timescaledb
     restart: unless-stopped
     environment:
@@ -15,6 +13,12 @@ services:
       - "${TS_PORT:-5432}:5432"
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
+      - ../../db/migrations/001_telemetry_schema.sql:/docker-entrypoint-initdb.d/01_telemetry_schema.sql:ro
+      - ../../db/migrations/002_indexes_policies.sql:/docker-entrypoint-initdb.d/02_indexes_policies.sql:ro
+      - ../../db/migrations/003_command_and_recovery_audit.sql:/docker-entrypoint-initdb.d/03_command_and_recovery_audit.sql:ro
+      - ../../db/migrations/004_query_performance_views.sql:/docker-entrypoint-initdb.d/04_query_performance_views.sql:ro
+      - ./bootstrap/10_local_roles.sql:/docker-entrypoint-initdb.d/05_local_roles.sql:ro
+      - ../../db/scripts/verify_setup.sql:/docker-entrypoint-initdb.d/06_verify_setup.sql:ro
     healthcheck:
       test:
         [
