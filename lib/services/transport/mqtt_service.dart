@@ -239,7 +239,6 @@ class MqttService {
       sessionId: sessionId,
       sessionState: state.sessionControlState.sessionState,
       createdAtUtc: DateTime.now().toUtc(),
-      lapsPlanned: state.sessionControlState.lapsPlanned,
       lapsCompleted: state.sessionControlState.lapsCompleted,
       events: events,
     );

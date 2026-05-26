@@ -4,13 +4,11 @@ import 'package:telemetry_dashboard/services/orchestration/session_orchestrator.
 
 SessionControlState _baseControl({
   SessionState sessionState = SessionState.idle,
-  int lapsPlanned = 3,
   int lapsCompleted = 0,
 }) {
   return SessionControlState(
     sessionState: sessionState,
     uiMode: UiMode.driver,
-    lapsPlanned: lapsPlanned,
     lapsCompleted: lapsCompleted,
     lapPhase: LapPhase.prestartCheck,
     crossingDeadzoneMs: 3000,
@@ -61,11 +59,10 @@ void main() {
       expect(decision.nextControl.lapPhase, LapPhase.running);
     });
 
-    test('blocks normal stop when lap target is incomplete', () {
+    test('allows normal stop from logging state', () {
       final orchestrator = SessionOrchestrator();
       final control = _baseControl(
         sessionState: SessionState.logging,
-        lapsPlanned: 4,
         lapsCompleted: 2,
       );
 
@@ -73,19 +70,16 @@ void main() {
         control: control,
         nowUtc: DateTime.now().toUtc(),
         abort: false,
-        enforceLapTarget: true,
       );
 
-      expect(decision.accepted, isFalse);
-      expect(decision.reason, isNotNull);
-      expect(decision.nextControl.sessionState, SessionState.logging);
+      expect(decision.accepted, isTrue);
+      expect(decision.nextControl.sessionState, SessionState.ended);
     });
 
-    test('allows stop on abort regardless of lap target', () {
+    test('allows stop on abort from any logging state', () {
       final orchestrator = SessionOrchestrator();
       final control = _baseControl(
         sessionState: SessionState.logging,
-        lapsPlanned: 4,
         lapsCompleted: 1,
       );
 
@@ -93,7 +87,6 @@ void main() {
         control: control,
         nowUtc: DateTime.now().toUtc(),
         abort: true,
-        enforceLapTarget: true,
       );
 
       expect(decision.accepted, isTrue);

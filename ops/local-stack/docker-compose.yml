@@ -2,7 +2,9 @@ version: '3.9'
 
 services:
   timescaledb:
-    image: timescale/timescaledb:2.17.2-pg16
+    build:
+      context: ../..
+      dockerfile: ops/local-stack/timescaledb/Dockerfile
     container_name: ect-timescaledb
     restart: unless-stopped
     environment:
@@ -38,43 +40,14 @@ services:
     networks:
       - telemetry_net
 
-  db-bootstrap:
-    image: postgres:16
-    container_name: ect-db-bootstrap
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    restart: 'no'
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-telemetry}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    entrypoint: ["sh", "-c"]
-    command: >
-      set -e;
-      DSN="host=timescaledb port=5432 dbname=$${POSTGRES_DB} user=$${POSTGRES_USER} password=$${POSTGRES_PASSWORD} sslmode=disable";
-      echo "Applying telemetry migrations...";
-      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/001_telemetry_schema.sql;
-      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/002_indexes_policies.sql;
-      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/003_command_and_recovery_audit.sql;
-      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/migrations/004_query_performance_views.sql;
-      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/ops/local-stack/bootstrap/10_local_roles.sql;
-      psql "$${DSN}" -v ON_ERROR_STOP=1 -f /workspace/db/scripts/verify_setup.sql;
-      echo "Database bootstrap complete.";
-    volumes:
-      - ../../db:/workspace/db:ro
-      - ../..:/workspace:ro
-    networks:
-      - telemetry_net
-
   telegraf:
     build:
       context: ./telegraf
       dockerfile: Dockerfile
     container_name: ect-telegraf
     depends_on:
-      db-bootstrap:
-        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
       mosquitto:
         condition: service_started
     restart: unless-stopped
@@ -93,8 +66,8 @@ services:
     image: grafana/grafana-oss:11.1.4
     container_name: ect-grafana
     depends_on:
-      db-bootstrap:
-        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}

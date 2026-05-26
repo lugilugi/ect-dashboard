@@ -215,9 +215,6 @@ class DashboardState extends ChangeNotifier {
 
   bool get _isLogging => _sessionControl.isLogging;
 
-  int get lapsPlanned => _sessionControl.lapsPlanned;
-  set lapsPlanned(int value) => _sessionControl.lapsPlanned = value;
-
   int get lapsCompleted => _sessionControl.lapsCompleted;
   set lapsCompleted(int value) => _sessionControl.lapsCompleted = value;
 
@@ -241,7 +238,7 @@ class DashboardState extends ChangeNotifier {
   final LapBoundaryService _lapBoundaryService =
       LapBoundaryService.defaultConfig();
 
-  bool enforceLapCompletionGate = false;
+
   bool startGateReady = false;
   int startGateRemainingMs = 0;
   String? startBlockReason;
@@ -264,7 +261,7 @@ class DashboardState extends ChangeNotifier {
   String get uiModeWire => _uiMode.wireValue;
   String get sessionStateWire => _sessionState.wireValue;
   String get lapPhaseWire => _lapPhase.wireValue;
-  String get lapProgressText => '$lapsCompleted/$lapsPlanned';
+  String get lapProgressText => '$lapNumber';
 
   bool get deadzoneActive => crossingDeadzoneRemainingMs > 0;
 
@@ -364,7 +361,6 @@ class DashboardState extends ChangeNotifier {
   SessionControlState get sessionControlState => SessionControlState(
     sessionState: _sessionState,
     uiMode: _uiMode,
-    lapsPlanned: lapsPlanned,
     lapsCompleted: lapsCompleted,
     lapPhase: _lapPhase,
     crossingDeadzoneMs: crossingDeadzoneMs,
@@ -382,7 +378,6 @@ class DashboardState extends ChangeNotifier {
       sessionName: _sessionName,
       sessionState: _sessionState,
       uiMode: _uiMode,
-      lapsPlanned: lapsPlanned,
       lapsCompleted: lapsCompleted,
       lapPhase: _lapPhase,
       crossingDeadzoneMs: crossingDeadzoneMs,
@@ -495,7 +490,7 @@ class DashboardState extends ChangeNotifier {
   }
 
   // START SESSION
-  bool startSession(String name, {int? plannedLaps}) {
+  bool startSession(String name) {
     final resolvedName = name.isEmpty ? generateDefaultName() : name;
     if (_sessionId.isEmpty) {
       _sessionId = const Uuid().v4();
@@ -504,7 +499,6 @@ class DashboardState extends ChangeNotifier {
 
     final armedControl = _sessionOrchestrator.arm(
       control: sessionControlState,
-      plannedLaps: plannedLaps,
     );
     _applySessionControlState(armedControl);
 
@@ -546,7 +540,6 @@ class DashboardState extends ChangeNotifier {
       control: sessionControlState,
       nowUtc: DateTime.now().toUtc(),
       abort: abort,
-      enforceLapTarget: enforceLapCompletionGate,
     );
 
     if (!decision.accepted) {
@@ -561,10 +554,9 @@ class DashboardState extends ChangeNotifier {
     return true;
   }
 
-  void armSession({int? plannedLaps}) {
+  void armSession() {
     final armedControl = _sessionOrchestrator.arm(
       control: sessionControlState,
-      plannedLaps: plannedLaps,
     );
     _applySessionControlState(armedControl);
     notifyListeners();
@@ -587,7 +579,7 @@ class DashboardState extends ChangeNotifier {
   }
 
   void setLapsCompleted(int value) {
-    final bounded = value.clamp(0, lapsPlanned);
+    final bounded = value.clamp(0, 9999);
     if (lapsCompleted == bounded) {
       return;
     }
@@ -596,15 +588,8 @@ class DashboardState extends ChangeNotifier {
   }
 
   void setLapsPlanned(int value) {
-    final bounded = value.clamp(1, 30);
-    if (lapsPlanned == bounded) {
-      return;
-    }
-    lapsPlanned = bounded;
-    if (lapsCompleted > lapsPlanned) {
-      lapsCompleted = lapsPlanned;
-    }
-    notifyListeners();
+    // No-op: lapsPlanned has been removed. Kept for backward compatibility
+    // with preferences that may call this on restore.
   }
 
   void setCrossingDeadzoneMs(int value) {
@@ -1688,7 +1673,7 @@ class DashboardState extends ChangeNotifier {
     }
 
     var cursor = nextDivider;
-    while (cumulativeDistanceKm >= cursor && lapsCompleted < lapsPlanned) {
+    while (cumulativeDistanceKm >= cursor) {
       _applyDividerLapAccepted(reason: 'distance_divider');
       cursor += dividerKm;
     }
@@ -1696,12 +1681,10 @@ class DashboardState extends ChangeNotifier {
   }
 
   void _applyDividerLapAccepted({required String reason}) {
-    final nextLapsCompleted = (lapsCompleted + 1).clamp(0, lapsPlanned).toInt();
+    final nextLapsCompleted = lapsCompleted + 1;
     final nextControl = sessionControlState.copyWith(
       lapsCompleted: nextLapsCompleted,
-      lapPhase: nextLapsCompleted >= lapsPlanned
-          ? LapPhase.lapComplete
-          : LapPhase.running,
+      lapPhase: LapPhase.running,
       crossingValid: true,
       crossingDeadzoneRemainingMs: 0,
     );

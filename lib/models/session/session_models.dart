@@ -137,7 +137,6 @@ extension LapDividerModeWire on LapDividerMode {
 class SessionControlState {
   final SessionState sessionState;
   final UiMode uiMode;
-  final int lapsPlanned;
   final int lapsCompleted;
   final LapPhase lapPhase;
   final int crossingDeadzoneMs;
@@ -147,7 +146,6 @@ class SessionControlState {
   const SessionControlState({
     required this.sessionState,
     required this.uiMode,
-    required this.lapsPlanned,
     required this.lapsCompleted,
     required this.lapPhase,
     required this.crossingDeadzoneMs,
@@ -158,7 +156,6 @@ class SessionControlState {
   SessionControlState copyWith({
     SessionState? sessionState,
     UiMode? uiMode,
-    int? lapsPlanned,
     int? lapsCompleted,
     LapPhase? lapPhase,
     int? crossingDeadzoneMs,
@@ -168,7 +165,6 @@ class SessionControlState {
     return SessionControlState(
       sessionState: sessionState ?? this.sessionState,
       uiMode: uiMode ?? this.uiMode,
-      lapsPlanned: lapsPlanned ?? this.lapsPlanned,
       lapsCompleted: lapsCompleted ?? this.lapsCompleted,
       lapPhase: lapPhase ?? this.lapPhase,
       crossingDeadzoneMs: crossingDeadzoneMs ?? this.crossingDeadzoneMs,
@@ -182,7 +178,6 @@ class SessionControlState {
     return {
       'session_state': sessionState.wireValue,
       'ui_mode': uiMode.wireValue,
-      'laps_planned': lapsPlanned,
       'laps_completed': lapsCompleted,
       'lap_phase': lapPhase.wireValue,
       'crossing_deadzone_ms': crossingDeadzoneMs,
@@ -195,7 +190,6 @@ class SessionControlState {
     return SessionControlState(
       sessionState: SessionStateWire.fromWire(json['session_state'] as String),
       uiMode: UiModeWire.fromWire(json['ui_mode'] as String),
-      lapsPlanned: (json['laps_planned'] as num).toInt(),
       lapsCompleted: (json['laps_completed'] as num).toInt(),
       lapPhase: LapPhaseWire.fromWire(json['lap_phase'] as String),
       crossingDeadzoneMs: (json['crossing_deadzone_ms'] as num).toInt(),
@@ -211,7 +205,6 @@ class SessionCheckpointSnapshot {
   final String sessionName;
   final SessionState sessionState;
   final UiMode uiMode;
-  final int lapsPlanned;
   final int lapsCompleted;
   final LapPhase lapPhase;
   final int crossingDeadzoneMs;
@@ -232,7 +225,6 @@ class SessionCheckpointSnapshot {
     required this.sessionName,
     required this.sessionState,
     required this.uiMode,
-    required this.lapsPlanned,
     required this.lapsCompleted,
     required this.lapPhase,
     required this.crossingDeadzoneMs,
@@ -253,7 +245,6 @@ class SessionCheckpointSnapshot {
     return SessionControlState(
       sessionState: sessionState,
       uiMode: uiMode,
-      lapsPlanned: lapsPlanned,
       lapsCompleted: lapsCompleted,
       lapPhase: lapPhase,
       crossingDeadzoneMs: crossingDeadzoneMs,
@@ -268,7 +259,6 @@ class SessionCheckpointSnapshot {
       'session_name': sessionName,
       'session_state': sessionState.wireValue,
       'ui_mode': uiMode.wireValue,
-      'laps_planned': lapsPlanned,
       'laps_completed': lapsCompleted,
       'lap_phase': lapPhase.wireValue,
       'crossing_deadzone_ms': crossingDeadzoneMs,
@@ -292,7 +282,6 @@ class SessionCheckpointSnapshot {
       sessionName: json['session_name'] as String? ?? '',
       sessionState: SessionStateWire.fromWire(json['session_state'] as String),
       uiMode: UiModeWire.fromWire(json['ui_mode'] as String),
-      lapsPlanned: (json['laps_planned'] as num?)?.toInt() ?? 1,
       lapsCompleted: (json['laps_completed'] as num?)?.toInt() ?? 0,
       lapPhase: LapPhaseWire.fromWire(json['lap_phase'] as String),
       crossingDeadzoneMs:

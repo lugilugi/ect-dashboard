@@ -59,6 +59,7 @@ void main() {
         forceInMemory: true,
         maxPendingBatches: 64,
       );
+      state.attachSpoolHealthStore(spool.spoolHealth);
       final transport = _FakeMqttTransport();
       final mqtt = MqttService(
         state,
@@ -71,7 +72,6 @@ void main() {
         sessionName: 'Recovered Session',
         sessionState: SessionState.logging,
         uiMode: UiMode.driver,
-        lapsPlanned: 5,
         lapsCompleted: 2,
         lapPhase: LapPhase.running,
         crossingDeadzoneMs: 3000,
@@ -143,6 +143,7 @@ void main() {
         forceInMemory: true,
         maxPendingBatches: 64,
       );
+      state.attachSpoolHealthStore(spool.spoolHealth);
       final transport = _FakeMqttTransport();
       final mqtt = MqttService(
         state,
@@ -155,7 +156,6 @@ void main() {
         sessionName: 'Recovered Session Lagged Checkpoint',
         sessionState: SessionState.logging,
         uiMode: UiMode.driver,
-        lapsPlanned: 5,
         lapsCompleted: 3,
         lapPhase: LapPhase.running,
         crossingDeadzoneMs: 3000,
@@ -214,7 +214,6 @@ void main() {
           sessionName: 'Restart Loop Session',
           sessionState: SessionState.logging,
           uiMode: UiMode.driver,
-          lapsPlanned: 5,
           lapsCompleted: 2,
           lapPhase: LapPhase.running,
           crossingDeadzoneMs: 3000,
@@ -238,6 +237,7 @@ void main() {
         );
 
         final firstState = DashboardState();
+        firstState.attachSpoolHealthStore(spool.spoolHealth);
         final firstMqtt = MqttService(
           firstState,
           localSpoolService: spool,
@@ -264,7 +264,6 @@ void main() {
           sessionName: baseSnapshot.sessionName,
           sessionState: SessionState.logging,
           uiMode: UiMode.driver,
-          lapsPlanned: baseSnapshot.lapsPlanned,
           lapsCompleted: baseSnapshot.lapsCompleted,
           lapPhase: baseSnapshot.lapPhase,
           crossingDeadzoneMs: baseSnapshot.crossingDeadzoneMs,
@@ -283,6 +282,7 @@ void main() {
         );
 
         final secondState = DashboardState();
+        secondState.attachSpoolHealthStore(spool.spoolHealth);
         final secondMqtt = MqttService(
           secondState,
           localSpoolService: spool,
@@ -301,7 +301,7 @@ void main() {
         expect(secondState.sessionId, baseSnapshot.sessionId);
         expect(secondMqtt.sequenceForCheckpoint, 22);
         expect(await spool.pendingDecodedEventCount(), 3);
-        expect(secondState.recoveryResumeCount, 1);
+        expect(secondState.recoveryResumeCount, 2);
 
         secondService.stop();
         secondState.dispose();
@@ -317,6 +317,7 @@ void main() {
           forceInMemory: true,
           maxPendingBatches: 64,
         );
+        state.attachSpoolHealthStore(spool.spoolHealth);
         final transport = _FakeMqttTransport();
         final mqtt = MqttService(
           state,
@@ -337,7 +338,6 @@ void main() {
           sessionName: 'Active Session',
           sessionState: SessionState.logging,
           uiMode: UiMode.driver,
-          lapsPlanned: 4,
           lapsCompleted: 1,
           lapPhase: LapPhase.running,
           crossingDeadzoneMs: 3000,

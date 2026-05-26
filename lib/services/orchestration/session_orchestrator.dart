@@ -36,16 +36,10 @@ class SessionOrchestrator {
 
   SessionControlState arm({
     required SessionControlState control,
-    int? plannedLaps,
   }) {
-    final resolvedPlannedLaps = plannedLaps == null || plannedLaps <= 0
-        ? control.lapsPlanned
-        : plannedLaps;
-
     return control.copyWith(
       sessionState: SessionState.armed,
       uiMode: UiMode.driver,
-      lapsPlanned: resolvedPlannedLaps,
       lapsCompleted: 0,
       lapPhase: LapPhase.prestartCheck,
       crossingValid: false,
@@ -127,7 +121,6 @@ class SessionOrchestrator {
     required SessionControlState control,
     required DateTime nowUtc,
     bool abort = false,
-    bool enforceLapTarget = true,
   }) {
     final gateStatus = evaluateStartGate(speedKmh: 0, nowUtc: nowUtc);
 
@@ -135,18 +128,6 @@ class SessionOrchestrator {
       return SessionTransitionDecision(
         accepted: false,
         reason: 'Session can only stop from LOGGING state.',
-        nextControl: control,
-        startGateStatus: gateStatus,
-      );
-    }
-
-    if (!abort &&
-        enforceLapTarget &&
-        control.lapsCompleted < control.lapsPlanned) {
-      return SessionTransitionDecision(
-        accepted: false,
-        reason:
-            'End blocked until lapsCompleted >= lapsPlanned (or abort is used).',
         nextControl: control,
         startGateStatus: gateStatus,
       );
@@ -168,10 +149,7 @@ class SessionOrchestrator {
     required SessionControlState control,
     required int deadzoneMs,
   }) {
-    final nextLapsCompleted = (control.lapsCompleted + 1).clamp(
-      0,
-      control.lapsPlanned,
-    );
+    final nextLapsCompleted = control.lapsCompleted + 1;
 
     return control.copyWith(
       lapsCompleted: nextLapsCompleted,
@@ -188,7 +166,6 @@ class SessionControlStore {
   SessionState _sessionState = SessionState.idle;
   LapPhase lapPhase = LapPhase.prestartCheck;
 
-  int lapsPlanned = 1;
   int lapsCompleted = 0;
   int crossingDeadzoneMs = 3000;
   int crossingDeadzoneRemainingMs = 0;
@@ -203,7 +180,6 @@ class SessionControlStore {
     return SessionControlState(
       sessionState: _sessionState,
       uiMode: uiMode,
-      lapsPlanned: lapsPlanned,
       lapsCompleted: lapsCompleted,
       lapPhase: lapPhase,
       crossingDeadzoneMs: crossingDeadzoneMs,
@@ -213,7 +189,6 @@ class SessionControlStore {
   }
 
   void applyControlState(SessionControlState control) {
-    lapsPlanned = control.lapsPlanned;
     lapsCompleted = control.lapsCompleted;
     crossingDeadzoneMs = control.crossingDeadzoneMs;
     crossingDeadzoneRemainingMs = control.crossingDeadzoneRemainingMs;

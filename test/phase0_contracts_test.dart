@@ -23,7 +23,6 @@ void main() {
       const control = SessionControlState(
         sessionState: SessionState.logging,
         uiMode: UiMode.driver,
-        lapsPlanned: 10,
         lapsCompleted: 3,
         lapPhase: LapPhase.crossingDeadzone,
         crossingDeadzoneMs: 3000,
@@ -36,7 +35,6 @@ void main() {
 
       expect(decoded.sessionState, equals(control.sessionState));
       expect(decoded.uiMode, equals(control.uiMode));
-      expect(decoded.lapsPlanned, equals(control.lapsPlanned));
       expect(decoded.lapsCompleted, equals(control.lapsCompleted));
       expect(decoded.lapPhase, equals(control.lapPhase));
       expect(decoded.crossingDeadzoneMs, equals(control.crossingDeadzoneMs));
@@ -106,7 +104,6 @@ void main() {
         sessionId: event.sessionId,
         sessionState: SessionState.logging,
         createdAtUtc: DateTime.utc(2026, 4, 16, 8, 20, 1),
-        lapsPlanned: 10,
         lapsCompleted: 1,
         events: [event],
       );
@@ -119,7 +116,6 @@ void main() {
       expect(decoded.sessionId, equals(payload.sessionId));
       expect(decoded.sessionState, equals(payload.sessionState));
       expect(decoded.createdAtUtc, equals(payload.createdAtUtc));
-      expect(decoded.lapsPlanned, equals(payload.lapsPlanned));
       expect(decoded.lapsCompleted, equals(payload.lapsCompleted));
       expect(decoded.events.length, equals(1));
       expect(decoded.events.first.metricKey, equals(event.metricKey));

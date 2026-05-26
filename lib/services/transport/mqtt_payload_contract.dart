@@ -9,7 +9,6 @@ class TelemetryEventBatchPayload {
   final String sessionId;
   final SessionState sessionState;
   final DateTime createdAtUtc;
-  final int lapsPlanned;
   final int lapsCompleted;
   final List<DecodedMetricEvent> events;
 
@@ -19,7 +18,6 @@ class TelemetryEventBatchPayload {
     required this.sessionId,
     required this.sessionState,
     required this.createdAtUtc,
-    required this.lapsPlanned,
     required this.lapsCompleted,
     required this.events,
   });
@@ -36,7 +34,6 @@ class TelemetryEventBatchPayload {
       sessionId: sessionId,
       sessionState: sessionControlState.sessionState,
       createdAtUtc: DateTime.now().toUtc(),
-      lapsPlanned: sessionControlState.lapsPlanned,
       lapsCompleted: sessionControlState.lapsCompleted,
       events: [event],
     );
@@ -49,7 +46,6 @@ class TelemetryEventBatchPayload {
       'session_id': sessionId,
       'session_state': sessionState.wireValue,
       'created_at_utc': createdAtUtc.toUtc().toIso8601String(),
-      'laps_planned': lapsPlanned,
       'laps_completed': lapsCompleted,
       'events': events.map((event) => event.toJson()).toList(),
     };
@@ -62,7 +58,6 @@ class TelemetryEventBatchPayload {
       sessionId: json['session_id'] as String,
       sessionState: SessionStateWire.fromWire(json['session_state'] as String),
       createdAtUtc: DateTime.parse(json['created_at_utc'] as String).toUtc(),
-      lapsPlanned: (json['laps_planned'] as num).toInt(),
       lapsCompleted: (json['laps_completed'] as num).toInt(),
       events: (json['events'] as List<dynamic>)
           .map((entry) => DecodedMetricEvent.fromJson(entry as Map<String, dynamic>))

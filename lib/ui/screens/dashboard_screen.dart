@@ -177,9 +177,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       );
       // Create a controller for the host address
       final hostController = TextEditingController(text: state.mqttHost);
-      final plannedLapsController = TextEditingController(
-        text: state.lapsPlanned.toString(),
-      );
 
       showDialog(
         context: context,
@@ -214,27 +211,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 ),
                 decoration: InputDecoration(
                   labelText: "RUN NAME",
-                  labelStyle: const TextStyle(
-                    color: Colors.white38,
-                    fontSize: 10,
-                    letterSpacing: 1.2,
-                  ),
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: p.border),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: plannedLapsController,
-                keyboardType: TextInputType.number,
-                style: TextStyle(
-                  color: p.lightGreen,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.bold,
-                ),
-                decoration: InputDecoration(
-                  labelText: 'PLANNED LAPS',
                   labelStyle: const TextStyle(
                     color: Colors.white38,
                     fontSize: 10,
@@ -304,15 +280,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               onPressed: () {
                 // 1. Update the host in state first
                 state.updateMqttHost(hostController.text);
-                final parsedLaps = int.tryParse(
-                  plannedLapsController.text.trim(),
-                );
-                final plannedLaps = parsedLaps ?? state.lapsPlanned;
-                state.setLapsPlanned(plannedLaps);
                 // 2. Start the session with the provided name
                 final started = state.startSession(
                   nameController.text,
-                  plannedLaps: plannedLaps,
                 );
                 if (started) {
                   Navigator.pop(context);

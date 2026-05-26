@@ -7,7 +7,7 @@ This folder provides a turnkey local backend stack for development:
 3. Telegraf (via Dockerfile)
 4. Grafana
 
-The stack also runs a one-shot `db-bootstrap` service that:
+The database container (`timescaledb`) is built from a custom Dockerfile that automatically:
 
 1. Applies all DB migrations in order.
 2. Creates local ingest/reader roles.
@@ -39,16 +39,16 @@ Compose automatically loads `.env` from the same directory as the compose file.
 
 ## Verify Bootstrap
 
-Check bootstrap logs:
+Check the database logs to confirm that all migrations and role configurations were applied successfully:
 
 ```bash
-docker compose -f ops/local-stack/docker-compose.yml logs db-bootstrap
+docker compose -f ops/local-stack/docker-compose.yml logs timescaledb
 ```
 
-Look for:
+Look for the initialization output, including:
 
-1. Migration apply completion.
-2. `Database bootstrap complete.`
+1. Migration apply completion messages.
+2. `=== Summary Views ===` and `=== Sanity counts ===` outputs from the verification script.
 
 ## Telegraf DB Credentials (Local)
 

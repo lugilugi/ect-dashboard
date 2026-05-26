@@ -36,7 +36,6 @@ SessionCheckpointSnapshot _loggingSnapshot({
     sessionName: 'Alert Test Session',
     sessionState: SessionState.logging,
     uiMode: UiMode.driver,
-    lapsPlanned: 5,
     lapsCompleted: lapsCompleted,
     lapPhase: LapPhase.running,
     crossingDeadzoneMs: 3000,

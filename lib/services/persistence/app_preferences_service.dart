@@ -8,7 +8,7 @@ class AppPreferencesService {
   static const String _kUseLightTheme = 'prefs.use_light_theme';
   static const String _kUseDictionaryAuxDispatch =
       'prefs.use_dictionary_aux_dispatch';
-  static const String _kLapsPlanned = 'prefs.laps_planned';
+
   static const String _kCrossingDeadzoneMs = 'prefs.crossing_deadzone_ms';
   static const String _kLapDividerMode = 'prefs.lap_divider_mode';
   static const String _kDistanceLapDividerKm = 'prefs.distance_lap_divider_km';
@@ -34,7 +34,6 @@ class AppPreferencesService {
       state.mqttHost,
       state.useLightTheme,
       state.useDictionaryAuxDispatch,
-      state.lapsPlanned,
       state.crossingDeadzoneMs,
       state.lapDividerMode.wireValue,
       state.distanceLapDividerKm.toStringAsFixed(3),
@@ -69,10 +68,6 @@ class AppPreferencesService {
       state.toggleDictionaryAuxDispatch(useDictionaryAuxDispatch);
     }
 
-    final lapsPlanned = prefs.getInt(_kLapsPlanned);
-    if (lapsPlanned != null) {
-      state.setLapsPlanned(lapsPlanned);
-    }
 
     final crossingDeadzoneMs = prefs.getInt(_kCrossingDeadzoneMs);
     if (crossingDeadzoneMs != null) {
@@ -158,7 +153,6 @@ class AppPreferencesService {
       _kUseDictionaryAuxDispatch,
       state.useDictionaryAuxDispatch,
     );
-    await prefs.setInt(_kLapsPlanned, state.lapsPlanned);
     await prefs.setInt(_kCrossingDeadzoneMs, state.crossingDeadzoneMs);
     await prefs.setString(_kLapDividerMode, state.lapDividerMode.wireValue);
     await prefs.setDouble(_kDistanceLapDividerKm, state.distanceLapDividerKm);

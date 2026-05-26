@@ -2,6 +2,15 @@
 
 This runbook provides a complete path to stand up the backend database side for telemetry ingest and analytics.
 
+> [!NOTE]
+> For local development, the database setup is fully automated. You do not need to run migrations or configure roles manually. Simply spin up the docker-compose stack:
+> ```bash
+> docker compose -f ops/local-stack/docker-compose.yml up --build -d
+> ```
+> The custom TimescaleDB Dockerfile automatically initializes the schema, applies migrations in order, sets up local credentials (Telegraf/Grafana), and runs verification scripts.
+> 
+> The manual steps outlined below are optional and intended only for custom/remote database environments.
+
 It covers:
 
 1. TimescaleDB schema setup.

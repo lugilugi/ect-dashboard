@@ -6,7 +6,6 @@ SessionControlState _loggingControl() {
   return const SessionControlState(
     sessionState: SessionState.logging,
     uiMode: UiMode.driver,
-    lapsPlanned: 10,
     lapsCompleted: 0,
     lapPhase: LapPhase.running,
     crossingDeadzoneMs: 3000,

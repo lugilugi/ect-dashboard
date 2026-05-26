@@ -30,7 +30,6 @@ SessionCheckpointSnapshot _loggingSnapshot(String sessionId) {
     sessionName: 'Hardening Session',
     sessionState: SessionState.logging,
     uiMode: UiMode.driver,
-    lapsPlanned: 10,
     lapsCompleted: 0,
     lapPhase: LapPhase.running,
     crossingDeadzoneMs: 3000,

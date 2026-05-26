@@ -421,8 +421,8 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
     final center = _resolveGeofenceMapCenter();
     final hasDraft = _draftGeofenceStart != null && _draftGeofenceEnd != null;
     final polylinePoints = <LatLng>[
-      if (_draftGeofenceStart != null) _draftGeofenceStart!,
-      if (_draftGeofenceEnd != null) _draftGeofenceEnd!,
+      ?_draftGeofenceStart,
+      ?_draftGeofenceEnd,
     ];
 
     // Smart Auto-Centering on GPS Lock
@@ -1405,38 +1405,6 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
           _settingsCard(
             child: Column(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'PLANNED LAPS',
-                      style: TextStyle(
-                        color: p.dimText,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 11,
-                      ),
-                    ),
-                    Text(
-                      state.lapsPlanned.toString(),
-                      style: TextStyle(
-                        color: p.lightGreen,
-                        fontFamily: 'monospace',
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-                Slider(
-                  value: state.lapsPlanned.toDouble(),
-                  min: 1,
-                  max: 20,
-                  divisions: 19,
-                  activeColor: p.lightGreen,
-                  onChanged: (val) => state.setLapsPlanned(val.round()),
-                ),
-                const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
