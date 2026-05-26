@@ -7,7 +7,7 @@ CREATE SCHEMA IF NOT EXISTS telemetry;
 -- 1. Core Tables
 
 CREATE TABLE IF NOT EXISTS telemetry.sessions (
-  session_id UUID PRIMARY KEY,
+  session_id TEXT PRIMARY KEY,
   session_name TEXT NOT NULL,
   session_state TEXT NOT NULL DEFAULT 'IDLE',
   laps_completed INTEGER NOT NULL DEFAULT 0,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS telemetry.sessions (
 );
 
 CREATE TABLE IF NOT EXISTS telemetry.laps (
-  session_id UUID NOT NULL,
+  session_id TEXT NOT NULL,
   lap_number INTEGER NOT NULL,
   started_at_utc TIMESTAMPTZ NOT NULL,
   ended_at_utc TIMESTAMPTZ,
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS telemetry.laps (
 
 CREATE TABLE IF NOT EXISTS telemetry.telemetry_events (
   ts_wall_utc TIMESTAMPTZ NOT NULL,
-  session_id UUID NOT NULL,
+  session_id TEXT NOT NULL,
   lap_number INTEGER,
   ts_session_ms BIGINT NOT NULL,
   session_state TEXT,
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS telemetry.telemetry_events (
 
 CREATE TABLE IF NOT EXISTS telemetry.lap_events (
   ts_wall_utc TIMESTAMPTZ NOT NULL,
-  session_id UUID NOT NULL,
+  session_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
   lap_number INTEGER,
   reason TEXT,
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS telemetry.lap_events (
 
 CREATE TABLE IF NOT EXISTS telemetry.raw_can_frames (
   ts_wall_utc TIMESTAMPTZ NOT NULL,
-  session_id UUID NOT NULL,
+  session_id TEXT NOT NULL,
   ts_session_ms BIGINT NOT NULL,
   can_id INTEGER NOT NULL,
   payload_hex TEXT NOT NULL,
@@ -152,8 +152,10 @@ SELECT
   session_name,
   session_state,
   laps_completed,
-  crossing_deadzone_ms
+  crossing_deadzone_ms,
+  NULL::TIMESTAMPTZ AS ts_wall_utc
 FROM telemetry.sessions;
+
 
 CREATE OR REPLACE FUNCTION telemetry.upsert_session_ingest()
 RETURNS TRIGGER AS $$
@@ -391,7 +393,7 @@ ORDER BY e.session_id, e.metric_key, e.ts_wall_utc DESC, e.seq_in_session DESC;
 
 CREATE TABLE IF NOT EXISTS telemetry.tx_command_audit (
   ts_wall_utc TIMESTAMPTZ NOT NULL,
-  session_id UUID,
+  session_id TEXT,
   command_sequence INTEGER,
   command_key TEXT NOT NULL,
   args_json JSONB,
@@ -413,7 +415,7 @@ SELECT create_hypertable(
 
 CREATE TABLE IF NOT EXISTS telemetry.recovery_events (
   ts_wall_utc TIMESTAMPTZ NOT NULL,
-  session_id UUID NOT NULL,
+  session_id TEXT NOT NULL,
   checkpoint_seq_in_session BIGINT,
   spool_max_seq_in_session BIGINT,
   recovered_seq_in_session BIGINT NOT NULL,

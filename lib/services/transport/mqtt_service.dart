@@ -107,7 +107,7 @@ class _PendingPublish {
 class MqttService {
   final DashboardState state;
   final LocalSpoolService _localSpoolService;
-  final MqttTransport _transport;
+  MqttTransport _transport;
   int _seqInSession = 0;
   String _lastSessionId = '';
   final ListQueue<_PendingPublish> _pendingPublishes = ListQueue();
@@ -136,6 +136,8 @@ class MqttService {
   // Generates a unique ID every time the app opens or the user hits "Start Session"
   final String currentSessionId = const Uuid().v4();
 
+  String? _currentConnectedHost;
+
   MqttService(
     this.state, {
     LocalSpoolService? localSpoolService,
@@ -144,13 +146,22 @@ class MqttService {
        _transport =
            transport ??
            MqttServerClientTransport(
-             host: 'pitwall-laptop',
+             host: state.mqttHost,
              clientId: 'eco_archers_car',
            ) {
+    if (transport == null) {
+      _currentConnectedHost = state.mqttHost;
+    }
     _setupCallbacks();
   }
 
   void publishSessionMetadata() {
+    if (_transport is MqttServerClientTransport &&
+        _currentConnectedHost != null &&
+        _currentConnectedHost != state.mqttHost) {
+      unawaited(_reconnectWithNewHost(state.mqttHost));
+    }
+
     final sessionId = state.sessionId;
     if (sessionId.isEmpty) return;
 
@@ -191,6 +202,35 @@ class MqttService {
         payloadJson: jsonEncode(payload),
       ),
     );
+  }
+
+  Future<void> _reconnectWithNewHost(String newHost) async {
+    debugPrint('MQTT Host changed from $_currentConnectedHost to $newHost. Reconnecting...');
+    _currentConnectedHost = newHost;
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _transport.disconnect();
+    _transport = MqttServerClientTransport(
+      host: newHost,
+      clientId: 'eco_archers_car',
+    );
+    _setupCallbacks();
+    state.setMqttStatus(MqttStatus.connecting);
+    _startFlushTimer();
+    try {
+      await _transport.connect();
+      if (_transport.isConnected) {
+        debugPrint('MQTT Connected to $newHost!');
+        state.setServerConnectionState(true);
+        await _flushPendingPublishes();
+        await _flushCanonicalEventBuffer(drainAll: true);
+      }
+    } catch (e) {
+      debugPrint('MQTT Connection to $newHost failed: $e');
+      _transport.disconnect();
+      state.setServerConnectionState(false);
+      state.setMqttStatus(MqttStatus.disconnected);
+    }
   }
 
   Future<void> start() async {

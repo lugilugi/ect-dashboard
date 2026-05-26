@@ -506,9 +506,7 @@ class DashboardState extends ChangeNotifier {
   // START SESSION
   bool startSession(String name) {
     final resolvedName = name.isEmpty ? generateDefaultName() : name;
-    if (_sessionId.isEmpty) {
-      _sessionId = const Uuid().v4();
-    }
+    _sessionId = const Uuid().v4();
     _sessionName = resolvedName;
 
     final armedControl = _sessionOrchestrator.arm(
