@@ -60,7 +60,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT to_timestamp((ts_session_ms - MIN(ts_session_ms) OVER (PARTITION BY lap_number)) / 1000.0) AS \"time\", ('Lap ' || lap_number::text) AS metric, metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND lap_number IS NOT NULL AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') ORDER BY lap_number, ts_session_ms;",
+          "rawSql": "SELECT to_timestamp((ts_session_ms - MIN(ts_session_ms) OVER (PARTITION BY lap_number)) / 1000.0) AS \"time\", ('Lap ' || lap_number::text) AS metric, value::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'Speed_Kmh' AND lap_number IS NOT NULL AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY lap_number, ts_session_ms;",
           "refId": "A"
         }
       ],
@@ -105,7 +105,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT to_timestamp(ts_session_ms / 1000.0) AS \"time\", metric_value::double precision AS value FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') ORDER BY ts_session_ms;",
+          "rawSql": "SELECT to_timestamp(ts_session_ms / 1000.0) AS \"time\", value::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'Speed_Kmh' AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY ts_session_ms;",
           "refId": "A"
         }
       ],
@@ -165,7 +165,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND(AVG(metric_value)::numeric, 2) AS avg_speed_kmh FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key = 'Speed_Kmh' AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours');",
+          "rawSql": "SELECT ROUND(AVG(value)::numeric, 2) AS avg_speed_kmh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'Speed_Kmh' AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours');",
           "refId": "A"
         }
       ],
@@ -225,7 +225,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND(MAX(metric_value)::numeric, 2) AS max_energy_j FROM telemetry.telemetry_events WHERE session_id::text = '${session_id}' AND metric_key IN ('Joules_780', 'Joules_740') AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours');",
+          "rawSql": "SELECT ROUND(MAX(value)::numeric, 2) AS max_energy_j FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('Joules_780', 'Joules_740') AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours');",
           "refId": "A"
         }
       ],
@@ -285,7 +285,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT duration_ms FROM telemetry.laps WHERE session_id::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY lap_number DESC LIMIT 1;",
+          "rawSql": "SELECT duration_ms FROM laps WHERE session_uid::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY lap_number DESC LIMIT 1;",
           "refId": "A"
         }
       ],
@@ -323,7 +323,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT lap_number, started_at_utc, ended_at_utc, duration_ms, crossing_valid, deadzone_ms, detection_method, detection_confidence FROM telemetry.laps WHERE session_id::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY lap_number;",
+          "rawSql": "SELECT lap_number, started_at, ended_at, duration_ms, crossing_valid, deadzone_ms, detection_method, detection_confidence FROM laps WHERE session_uid::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) ORDER BY lap_number;",
           "refId": "A"
         }
       ],
@@ -361,7 +361,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts_wall_utc, lap_number, event_type, reason, method, confidence, speed_kmh, heading_deg FROM telemetry.lap_events WHERE session_id::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND ts_wall_utc >= COALESCE((SELECT created_at_utc FROM telemetry.sessions WHERE session_id::text = '${session_id}'), now() - interval '6 hours') ORDER BY ts_wall_utc DESC LIMIT 200;",
+          "rawSql": "SELECT time, lap_number, event_type, reason, method, confidence, speed_kmh, heading_deg FROM telemetry.lap_events WHERE session_uid::text = '${session_id}' AND (${lap_number} = -1 OR lap_number = ${lap_number}) AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY time DESC LIMIT 200;",
           "refId": "A"
         }
       ],
@@ -389,14 +389,14 @@
           "type": "postgres",
           "uid": "timescaledb"
         },
-        "definition": "SELECT session_id::text AS __value, COALESCE(session_name, session_id::text) || ' | ' || to_char(COALESCE(started_at_utc, created_at_utc), 'YYYY-MM-DD HH24:MI:SS') AS __text FROM telemetry.sessions ORDER BY COALESCE(started_at_utc, created_at_utc) DESC LIMIT 100;",
+        "definition": "SELECT uid::text AS __value, COALESCE(session_name, uid::text) || ' | ' || to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS __text FROM sessions ORDER BY created_at DESC LIMIT 100;",
         "hide": 0,
         "includeAll": false,
         "label": "Session",
         "multi": false,
         "name": "session_id",
         "options": [],
-        "query": "SELECT session_id::text AS __value, COALESCE(session_name, session_id::text) || ' | ' || to_char(COALESCE(started_at_utc, created_at_utc), 'YYYY-MM-DD HH24:MI:SS') AS __text FROM telemetry.sessions ORDER BY COALESCE(started_at_utc, created_at_utc) DESC LIMIT 100;",
+        "query": "SELECT uid::text AS __value, COALESCE(session_name, uid::text) || ' | ' || to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS __text FROM sessions ORDER BY created_at DESC LIMIT 100;",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -414,14 +414,14 @@
           "type": "postgres",
           "uid": "timescaledb"
         },
-        "definition": "SELECT DISTINCT lap_number AS __value, ('Lap ' || lap_number::text) AS __text FROM telemetry.laps WHERE session_id::text = '${session_id}' ORDER BY lap_number;",
+        "definition": "SELECT DISTINCT lap_number AS __value, ('Lap ' || lap_number::text) AS __text FROM laps WHERE session_uid::text = '${session_id}' ORDER BY lap_number;",
         "hide": 0,
         "includeAll": true,
         "label": "Lap",
         "multi": false,
         "name": "lap_number",
         "options": [],
-        "query": "SELECT DISTINCT lap_number AS __value, ('Lap ' || lap_number::text) AS __text FROM telemetry.laps WHERE session_id::text = '${session_id}' ORDER BY lap_number;",
+        "query": "SELECT DISTINCT lap_number AS __value, ('Lap ' || lap_number::text) AS __text FROM laps WHERE session_uid::text = '${session_id}' ORDER BY lap_number;",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -441,3 +441,6 @@
   "version": 1,
   "weekStart": ""
 }
+
+
+

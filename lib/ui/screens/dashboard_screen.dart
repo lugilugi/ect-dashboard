@@ -156,6 +156,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     messenger.showSnackBar(SnackBar(content: Text('$label $status$reason')));
   }
 
+  void _handleAbortSession(BuildContext context, DashboardState state) {
+    if (state.isLogging) {
+      final stopped = state.stopSession(abort: true);
+      if (stopped) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Session aborted forcefully.')),
+        );
+      }
+    }
+  }
+
   void _handleStartStop(BuildContext context, DashboardState state) {
     final p = Palette(state.useLightTheme);
     final messenger = ScaffoldMessenger.of(context);
@@ -836,12 +847,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           const SizedBox(width: 10),
                           // START/STOP anchored to far right
                           GestureDetector(
-                            // STOP = tap (urgent), START = long-press (deliberate)
+                            // STOP = tap (urgent), ABORT = long-press (force), START = long-press (deliberate)
                             onTap: state.isLogging
                                 ? () => _handleStartStop(context, state)
                                 : null,
                             onLongPress: state.isLogging
-                                ? null
+                                ? () => _handleAbortSession(context, state)
                                 : () => _handleStartStop(context, state),
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),

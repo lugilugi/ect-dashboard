@@ -112,6 +112,7 @@ class MqttService {
   String _lastSessionId = '';
   final ListQueue<_PendingPublish> _pendingPublishes = ListQueue();
   final ListQueue<DecodedMetricEvent> _canonicalEventBuffer = ListQueue();
+  final Map<String, double> _lastPublishedValues = {};
   Timer? _flushTimer;
   bool _isFlushingCanonicalBuffer = false;
 
@@ -188,12 +189,14 @@ class MqttService {
     _lastSentCrossingDeadzoneMs = crossingDeadzoneMs;
 
     final payload = {
-      'session_id': sessionId,
+      'uid': sessionId,
       'session_name': sessionName,
-      'session_state': sessionState.wireValue,
-      'ui_mode': uiMode.wireValue,
-      'laps_completed': lapsCompleted,
-      'crossing_deadzone_ms': crossingDeadzoneMs,
+      'vehicle_setup': jsonEncode({
+        'session_state': sessionState.wireValue,
+        'ui_mode': uiMode.wireValue,
+        'laps_completed': lapsCompleted,
+        'crossing_deadzone_ms': crossingDeadzoneMs,
+      }),
     };
 
     unawaited(
@@ -590,10 +593,17 @@ class MqttService {
           break;
         }
 
-        final batchPayload = _buildBatchPayload(events: chunk);
+        final Map<String, dynamic> sparsePayload = {
+          'session_uid': chunk.first.sessionId,
+          'lap_number': chunk.first.lapNumber,
+        };
+        for (final event in chunk) {
+          sparsePayload[event.metricKey] = event.value;
+        }
+
         await _publishOrQueue(
           topic: canonicalTopic,
-          payloadJson: jsonEncode(batchPayload.toJson()),
+          payloadJson: jsonEncode(sparsePayload),
           sessionId: chunk.first.sessionId,
           seqInSessionStart: chunk.first.seqInSession,
           seqInSessionEnd: chunk.last.seqInSession,
@@ -742,6 +752,12 @@ class MqttService {
     if (requireLogging && !state.isLogging) {
       return;
     }
+
+    // Sparse Payload Optimization: Only buffer if the value has changed
+    if (_lastPublishedValues[metricName] == value) {
+      return;
+    }
+    _lastPublishedValues[metricName] = value;
 
     if (publishCanonicalTopic) {
       final event = _buildDecodedMetricEvent(
