@@ -25,6 +25,25 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   final PageController _pageController = PageController();
   int _selectedPage = 0;
 
+  Timer? _blinkTimer;
+  bool _blinkOn = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _blinkTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted) return;
+      setState(() => _blinkOn = !_blinkOn);
+    });
+  }
+
+  @override
+  void dispose() {
+    _blinkTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
   void _showInfoSnackbar(String message) {
     if (!mounted) {
       return;
@@ -472,7 +491,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 children: [
                   _buildIndicator(
                     Icons.keyboard_arrow_left,
-                    state.leftTurn,
+                    state.leftTurn && _blinkOn,
                     p.green,
                     p,
                     width: indicatorWidth,
@@ -545,7 +564,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   ),
                   _buildIndicator(
                     Icons.warning,
-                    state.hazards,
+                    state.hazards && _blinkOn,
                     p.red,
                     p,
                     width: indicatorWidth,
@@ -563,7 +582,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   ),
                   _buildIndicator(
                     Icons.keyboard_arrow_right,
-                    state.rightTurn,
+                    state.rightTurn && _blinkOn,
                     p.green,
                     p,
                     width: indicatorWidth,
@@ -982,3 +1001,5 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 }
+
+
