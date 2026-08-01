@@ -103,38 +103,4 @@ class LapCrossingEvent {
     this.headingDeg,
     this.speedKmh,
   });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'session_id': sessionId,
-      'lap_number': lapNumber,
-      'ts_wall_utc': tsWallUtc.toUtc().toIso8601String(),
-      'ts_session_ms': tsSessionMs,
-      'lap_phase': lapPhase.wireValue,
-      'crossing_valid': crossingValid,
-      if (reason != null) 'reason': reason,
-      if (confidence != null) 'confidence': confidence,
-      if (lat != null) 'lat': lat,
-      if (lon != null) 'lon': lon,
-      if (headingDeg != null) 'heading_deg': headingDeg,
-      if (speedKmh != null) 'speed_kmh': speedKmh,
-    };
-  }
-
-  factory LapCrossingEvent.fromJson(Map<String, dynamic> json) {
-    return LapCrossingEvent(
-      sessionId: json['session_id'] as String,
-      lapNumber: (json['lap_number'] as num).toInt(),
-      tsWallUtc: DateTime.parse(json['ts_wall_utc'] as String).toUtc(),
-      tsSessionMs: (json['ts_session_ms'] as num).toInt(),
-      lapPhase: LapPhaseWire.fromWire(json['lap_phase'] as String),
-      crossingValid: json['crossing_valid'] as bool,
-      reason: json['reason'] as String?,
-      confidence: (json['confidence'] as num?)?.toDouble(),
-      lat: (json['lat'] as num?)?.toDouble(),
-      lon: (json['lon'] as num?)?.toDouble(),
-      headingDeg: (json['heading_deg'] as num?)?.toDouble(),
-      speedKmh: (json['speed_kmh'] as num?)?.toDouble(),
-    );
-  }
 }

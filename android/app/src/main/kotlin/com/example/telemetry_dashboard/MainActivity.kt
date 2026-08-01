@@ -9,6 +9,7 @@ class MainActivity : FlutterActivity() {
 	companion object {
 		private const val FOREGROUND_CHANNEL = "ect_dashboard/foreground_telemetry"
 		private const val FUSED_LOCATION_CHANNEL = "ect_dashboard/fused_location"
+		private const val ALERT_CUE_CHANNEL = "ect_dashboard/alert_cue"
 	}
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -18,6 +19,28 @@ class MainActivity : FlutterActivity() {
 			flutterEngine.dartExecutor.binaryMessenger,
 			FUSED_LOCATION_CHANNEL,
 		).setStreamHandler(FusedLocationStreamHandler(this))
+
+		MethodChannel(
+			flutterEngine.dartExecutor.binaryMessenger,
+			ALERT_CUE_CHANNEL,
+		).setMethodCallHandler { call, result ->
+			when (call.method) {
+				"playAudio" -> {
+					val severity = call.argument<String>("severity") ?: "WARNING"
+					val volume = call.argument<Double>("volume") ?: 0.75
+					AlertCuePlayer.playAudio(this, severity, volume)
+					result.success(null)
+				}
+
+				"playHaptic" -> {
+					val severity = call.argument<String>("severity") ?: "WARNING"
+					AlertCuePlayer.playHaptic(this, severity)
+					result.success(null)
+				}
+
+				else -> result.notImplemented()
+			}
+		}
 
 		MethodChannel(
 			flutterEngine.dartExecutor.binaryMessenger,

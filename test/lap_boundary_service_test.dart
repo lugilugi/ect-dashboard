@@ -122,5 +122,51 @@ void main() {
       expect(rejected.crossingEvent?.crossingValid, isFalse);
       expect(rejected.crossingEvent?.reason, 'speed_below_threshold');
     });
+
+    test('setDeadzone updates the effective deadzone', () {
+      final service = LapBoundaryService(
+        config: const LapBoundaryConfig(
+          finishLineStart: GeoPoint(lat: 0, lon: -1),
+          finishLineEnd: GeoPoint(lat: 0, lon: 1),
+          expectedHeadingDeg: 0,
+          headingToleranceDeg: 45,
+          minCrossingSpeedKmh: 1.0,
+          minLapTime: Duration(seconds: 1),
+          deadzone: Duration(seconds: 3),
+        ),
+      );
+
+      service.setDeadzone(const Duration(seconds: 5));
+
+      final t0 = DateTime.now().toUtc();
+      service.processSample(
+        sample: GpsSample(
+          point: const GeoPoint(lat: -1, lon: 0),
+          headingDeg: 0,
+          speedKmh: 10,
+          tsUtc: t0,
+          source: 'phone_gps',
+        ),
+        control: _loggingControl(),
+        sessionId: 'session-c',
+        lapNumber: 1,
+      );
+
+      final accepted = service.processSample(
+        sample: GpsSample(
+          point: const GeoPoint(lat: 1, lon: 0),
+          headingDeg: 2,
+          speedKmh: 12,
+          tsUtc: t0.add(const Duration(seconds: 2)),
+          source: 'phone_gps',
+        ),
+        control: _loggingControl(),
+        sessionId: 'session-c',
+        lapNumber: 1,
+      );
+
+      expect(accepted.decision, LapCrossingDecision.accepted);
+      expect(accepted.deadzoneRemainingMs, 5000);
+    });
   });
 }

@@ -5,6 +5,7 @@ class PhoneGpsSample {
   final double speedMps;
   final double accuracyM;
   final DateTime timestampUtc;
+  final int satelliteCount;
 
   const PhoneGpsSample({
     required this.latitude,
@@ -13,6 +14,7 @@ class PhoneGpsSample {
     required this.speedMps,
     required this.accuracyM,
     required this.timestampUtc,
+    this.satelliteCount = -1,
   });
 
   double get speedKmh => speedMps * 3.6;

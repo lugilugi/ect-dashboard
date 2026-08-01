@@ -101,8 +101,6 @@ class CommandDictionaryService {
     ),
   };
 
-  Iterable<CommandDefinition> get definitions => _definitions.values;
-
   CommandDefinition? definitionFor(String commandKey) {
     return _definitions[commandKey];
   }

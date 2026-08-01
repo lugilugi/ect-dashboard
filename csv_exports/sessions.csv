@@ -1,1 +1,0 @@
-﻿session_id,session_name,session_state,laps_completed,crossing_speed_threshold_kmh,crossing_deadzone_ms,crossing_heading_tolerance_deg,vehicle_id,driver_id,armed_at_utc,started_at_utc,ended_at_utc,ended_reason,start_lat,start_lon,notes,config,created_at_utc

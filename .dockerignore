@@ -1,0 +1,17 @@
+# Keep the single-container backend build context small and reproducible.
+
+# Flutter / Dart build artifacts
+build/
+.dart_tool/
+.flutter-plugins-dependencies
+.flutter-plugins
+.metadata
+telemetry_dashboard.iml
+
+# VCS / IDE
+.git/
+.idea/
+
+# OS noise
+.DS_Store
+Thumbs.db

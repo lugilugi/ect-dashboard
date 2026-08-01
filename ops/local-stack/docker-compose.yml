@@ -2,7 +2,6 @@ services:
   timescaledb:
     image: timescale/timescaledb:2.17.2-pg16
     container_name: ect-timescaledb
-    platform: linux/amd64
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-telemetry}
@@ -13,6 +12,9 @@ services:
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ../../db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      # Server-side CSV export: script + writable export folder.
+      - ../../ops/backend:/ops/backend:ro
+      - ../../csv_exports:/exports
     healthcheck:
       test:
         [
@@ -52,6 +54,8 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
+      TOPIC_EVENTS: ${TOPIC_EVENTS:-telemetry/eco_archers/events}
+      TOPIC_SESSIONS: ${TOPIC_SESSIONS:-telemetry/eco_archers/sessions}
       TS_HOST: timescaledb
       TS_PORT: 5432
       TS_DB: ${POSTGRES_DB:-telemetry}
@@ -70,6 +74,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      TS_DATASOURCE_URL: timescaledb:5432
+      TS_DATASOURCE_USER: ${POSTGRES_USER:-postgres}
+      TS_DATASOURCE_DB: ${POSTGRES_DB:-telemetry}
+      TS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     volumes:

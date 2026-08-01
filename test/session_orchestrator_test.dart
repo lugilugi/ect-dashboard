@@ -59,28 +59,6 @@ void main() {
       expect(decision.nextControl.lapPhase, LapPhase.running);
     });
 
-    test('allows start without satisfying standstill hold if isSimulated is true', () {
-      final orchestrator = SessionOrchestrator(
-        standstillThresholdKmh: 0.5,
-        standstillHold: const Duration(milliseconds: 800),
-      );
-
-      final base = DateTime.now().toUtc();
-      final armed = orchestrator.arm(control: _baseControl());
-
-      // Vehicle is moving, standstill hold is not satisfied
-      final decision = orchestrator.requestStart(
-        control: armed,
-        speedKmh: 2.0,
-        nowUtc: base,
-        isSimulated: true,
-      );
-
-      expect(decision.accepted, isTrue);
-      expect(decision.nextControl.sessionState, SessionState.logging);
-      expect(decision.nextControl.lapPhase, LapPhase.running);
-    });
-
     test('allows normal stop from logging state', () {
       final orchestrator = SessionOrchestrator();
       final control = _baseControl(
@@ -114,6 +92,51 @@ void main() {
       expect(decision.accepted, isTrue);
       expect(decision.nextControl.sessionState, SessionState.ended);
       expect(decision.nextControl.lapPhase, LapPhase.sessionComplete);
+    });
+
+    test('allows restart from ENDED state after stop', () {
+      final orchestrator = SessionOrchestrator(
+        standstillThresholdKmh: 0.5,
+        standstillHold: const Duration(milliseconds: 800),
+      );
+
+      final base = DateTime.now().toUtc();
+      final ended = _baseControl(
+        sessionState: SessionState.ended,
+        lapsCompleted: 3,
+      );
+
+      orchestrator.evaluateStartGate(speedKmh: 0.0, nowUtc: base);
+      final decision = orchestrator.requestStart(
+        control: ended,
+        speedKmh: 0.0,
+        nowUtc: base.add(const Duration(milliseconds: 900)),
+      );
+
+      expect(decision.accepted, isTrue);
+      expect(decision.nextControl.sessionState, SessionState.logging);
+      expect(decision.nextControl.lapsCompleted, 0);
+      expect(decision.nextControl.lapPhase, LapPhase.running);
+    });
+
+    test('session clock only advances while logging', () {
+      final store = SessionControlStore();
+      store.applyControlState(_baseControl(sessionState: SessionState.idle));
+      store.sessionTimeSeconds = 10;
+      store.advanceOneSecond();
+      expect(store.sessionTimeSeconds, 10);
+
+      store.applyControlState(_baseControl(sessionState: SessionState.armed));
+      store.advanceOneSecond();
+      expect(store.sessionTimeSeconds, 10);
+
+      store.applyControlState(_baseControl(sessionState: SessionState.logging));
+      store.advanceOneSecond();
+      expect(store.sessionTimeSeconds, 11);
+
+      store.applyControlState(_baseControl(sessionState: SessionState.ended));
+      store.advanceOneSecond();
+      expect(store.sessionTimeSeconds, 11);
     });
   });
 }

@@ -2,6 +2,9 @@
 
 In-cabin telemetry dashboard for ECT Shell Eco-marathon workflows.
 
+![CI](https://github.com/lugilugi/ect-dashboard/actions/workflows/ci.yml/badge.svg)
+![Android Release](https://github.com/lugilugi/ect-dashboard/actions/workflows/android_release.yml/badge.svg)
+
 ## App Stack
 
 - Flutter app for in-cabin telemetry and driver/service views.
@@ -21,24 +24,26 @@ In-cabin telemetry dashboard for ECT Shell Eco-marathon workflows.
 
 ## Planning and Contracts
 
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
-- [REBUILD_PLAN.md](REBUILD_PLAN.md)
-- [UI.md](UI.md)
-- [DB_REFERENCE.md](DB_REFERENCE.md)
-- [PHASE7_HARDWARE_RUNBOOK.md](PHASE7_HARDWARE_RUNBOOK.md)
+- [BACKEND_GUIDE.md](BACKEND_GUIDE.md)
+
+## Releases & Updates
+
+Tag pushes (e.g. `git tag v1.0.0 && git push origin v1.0.0`) trigger the
+[Android Release Build](.github/workflows/android_release.yml) workflow: it
+runs analyze + tests, signs the APK with the release keystore, and attaches
+it to a GitHub Release. Because every build uses the same signing key, new
+versions install **over** the previous one — no uninstall needed. The
+`versionCode` increments automatically on every build, which is what Android
+uses to allow an update.
 
 ## Backend/Ops Artifacts
 
-### Database Migrations
+### Database Schema
 
-- [db/migrations/001_telemetry_schema.sql](db/migrations/001_telemetry_schema.sql)
-- [db/migrations/002_indexes_policies.sql](db/migrations/002_indexes_policies.sql)
-- [db/migrations/003_command_and_recovery_audit.sql](db/migrations/003_command_and_recovery_audit.sql)
-- [db/migrations/004_query_performance_views.sql](db/migrations/004_query_performance_views.sql)
+- [db/schema.sql](db/schema.sql)
 
 ### DB Setup Runbook and Scripts
 
-- [db/README.md](db/README.md)
 - [db/scripts/apply_migrations.ps1](db/scripts/apply_migrations.ps1)
 - [db/scripts/apply_migrations.sh](db/scripts/apply_migrations.sh)
 - [db/scripts/bootstrap_roles.sql](db/scripts/bootstrap_roles.sql)
@@ -46,33 +51,54 @@ In-cabin telemetry dashboard for ECT Shell Eco-marathon workflows.
 
 ### Telegraf and Mosquitto
 
-- [ops/telegraf/telegraf.conf](ops/telegraf/telegraf.conf)
 - [ops/mosquitto/mosquitto.conf.sample](ops/mosquitto/mosquitto.conf.sample)
 - [ops/mosquitto/README.md](ops/mosquitto/README.md)
 
-### One-Command Local Backend Stack
+### Single-Container Backend (one Dockerfile, no Compose needed)
+
+- [ops/backend/Dockerfile](ops/backend/Dockerfile) — TimescaleDB + Mosquitto + Telegraf + Grafana in one image
+- [ops/backend/supervisord.conf](ops/backend/supervisord.conf)
+- [ops/backend/mosquitto.conf](ops/backend/mosquitto.conf)
+- [ops/backend/telegraf.conf](ops/backend/telegraf.conf)
+
+### One-Command Multi-Container Local Stack (Compose)
 
 - [ops/local-stack/docker-compose.yml](ops/local-stack/docker-compose.yml)
-- [ops/local-stack/README.md](ops/local-stack/README.md)
+- [ops/local-stack/.env.example](ops/local-stack/.env.example)
 - [ops/local-stack/telegraf/Dockerfile](ops/local-stack/telegraf/Dockerfile)
+
+### CAN Signal Registry (app side)
+
+- [lib/models/telemetry/can_signal_registry.dart](lib/models/telemetry/can_signal_registry.dart) — single source of truth for every CAN signal published over MQTT
 
 ### Grafana Dashboards
 
 - [ops/grafana/dashboards/session_overview.json](ops/grafana/dashboards/session_overview.json)
 - [ops/grafana/dashboards/lap_analysis.json](ops/grafana/dashboards/lap_analysis.json)
-- [ops/grafana/README.md](ops/grafana/README.md)
+- [ops/grafana/provisioning/datasources/timescaledb.yml](ops/grafana/provisioning/datasources/timescaledb.yml)
 
 ## Backend Bootstrap
 
-### 1. Apply DB Migrations (In Order)
+The easiest path is the single-container backend (one Dockerfile) or the
+Compose stack — both are fully documented in [BACKEND_GUIDE.md](BACKEND_GUIDE.md):
+
+```bash
+# Option A: one container, everything inside
+docker build -t ect-backend -f ops/backend/Dockerfile .
+docker run -d --name ect-backend -p 1883:1883 -p 5432:5432 -p 3000:3000 ect-backend
+
+# Option B: separate containers per service
+cd ops/local-stack && docker compose up --build -d
+```
+
+Manual schema bootstrap (only if you run your own Timescale/PostgreSQL):
+
+### 1. Apply DB Schema
 
 Use your Timescale/PostgreSQL connection string in `TS_DSN` and run:
 
 ```bash
-psql "$TS_DSN" -f db/migrations/001_telemetry_schema.sql
-psql "$TS_DSN" -f db/migrations/002_indexes_policies.sql
-psql "$TS_DSN" -f db/migrations/003_command_and_recovery_audit.sql
-psql "$TS_DSN" -f db/migrations/004_query_performance_views.sql
+psql "$TS_DSN" -f db/schema.sql
 ```
 
 PowerShell helper (Windows):
@@ -86,27 +112,27 @@ PowerShell helper (Windows):
 ```sql
 SELECT table_name
 FROM information_schema.tables
-WHERE table_schema = 'telemetry'
+WHERE table_schema = 'public'
+  AND table_type = 'BASE TABLE'
 ORDER BY table_name;
 
 SELECT hypertable_name
 FROM timescaledb_information.hypertables
-WHERE hypertable_schema = 'telemetry'
 ORDER BY hypertable_name;
 
 SELECT indexname
 FROM pg_indexes
-WHERE schemaname = 'telemetry'
-	AND tablename = 'telemetry_events'
+WHERE schemaname = 'public'
+	AND tablename = 'telemetry_raw'
 ORDER BY indexname;
 ```
 
 ### 3. Verify Readiness for Session/Lap Queries
 
 ```sql
-SELECT COUNT(*) AS session_rows FROM telemetry.sessions;
-SELECT COUNT(*) AS event_rows FROM telemetry.telemetry_events;
-SELECT COUNT(*) AS lap_rows FROM telemetry.laps;
+SELECT COUNT(*) AS session_rows FROM sessions;
+SELECT COUNT(*) AS raw_rows FROM telemetry_raw;
+SELECT COUNT(*) AS lap_rows FROM laps;
 ```
 
 Or run the bundled verification script:
@@ -117,9 +143,9 @@ psql "$TS_DSN" -f db/scripts/verify_setup.sql
 
 ### 4. Provision Grafana Dashboards
 
-Follow [ops/grafana/README.md](ops/grafana/README.md) to mount provisioning and dashboards into Grafana.
+Mount the provisioning and dashboard files into Grafana (see [ops/grafana/provisioning](ops/grafana/provisioning)). The compose stack at [ops/local-stack/docker-compose.yml](ops/local-stack/docker-compose.yml) wires this up automatically.
 
-For full DB bootstrap details, role setup, and smoke tests, see [db/README.md](db/README.md).
+For full DB bootstrap details, role setup, and smoke tests, see [BACKEND_GUIDE.md](BACKEND_GUIDE.md).
 
 ## Flutter Development
 

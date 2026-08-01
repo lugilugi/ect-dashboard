@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Release signing keystores (never commit these)
+android/key.properties
+*.jks
+*.keystore

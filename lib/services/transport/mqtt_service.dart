@@ -129,10 +129,6 @@ class MqttService {
   static const Duration canonicalFlushInterval = Duration(milliseconds: 200);
 
   static const String canonicalTopic = 'telemetry/eco_archers/events';
-  static const String legacyRawTopic = 'telemetry/eco_archers/raw';
-
-  bool publishCanonicalTopic = true;
-  bool publishLegacyRawTopic = false;
 
   // Generates a unique ID every time the app opens or the user hits "Start Session"
   final String currentSessionId = const Uuid().v4();
@@ -181,13 +177,6 @@ class MqttService {
       return;
     }
 
-    _lastSentSessionId = sessionId;
-    _lastSentSessionName = sessionName;
-    _lastSentSessionState = sessionState;
-    _lastSentUiMode = uiMode;
-    _lastSentLapsCompleted = lapsCompleted;
-    _lastSentCrossingDeadzoneMs = crossingDeadzoneMs;
-
     final payload = {
       'uid': sessionId,
       'session_name': sessionName,
@@ -200,11 +189,46 @@ class MqttService {
     };
 
     unawaited(
-      _publishOrQueue(
-        topic: 'telemetry/eco_archers/sessions',
+      _publishSessionMetadataHandOff(
+        sessionId: sessionId,
+        sessionName: sessionName,
+        sessionState: sessionState,
+        uiMode: uiMode,
+        lapsCompleted: lapsCompleted,
+        crossingDeadzoneMs: crossingDeadzoneMs,
         payloadJson: jsonEncode(payload),
       ),
     );
+  }
+
+  // The _lastSent* dedup cache is updated only when the metadata was actually
+  // handed off (published directly or durably queued to the spool). If the
+  // handoff fails, the cache stays stale so the next attempt - or the
+  // reconnect hook in _setupCallbacks - re-publishes it instead of silently
+  // dropping the session metadata.
+  Future<void> _publishSessionMetadataHandOff({
+    required String sessionId,
+    required String sessionName,
+    required SessionState sessionState,
+    required UiMode uiMode,
+    required int lapsCompleted,
+    required int crossingDeadzoneMs,
+    required String payloadJson,
+  }) async {
+    final handedOff = await _publishOrQueue(
+      topic: 'telemetry/eco_archers/sessions',
+      payloadJson: payloadJson,
+    );
+    if (!handedOff) {
+      return;
+    }
+
+    _lastSentSessionId = sessionId;
+    _lastSentSessionName = sessionName;
+    _lastSentSessionState = sessionState;
+    _lastSentUiMode = uiMode;
+    _lastSentLapsCompleted = lapsCompleted;
+    _lastSentCrossingDeadzoneMs = crossingDeadzoneMs;
   }
 
   Future<void> _reconnectWithNewHost(String newHost) async {
@@ -218,7 +242,6 @@ class MqttService {
       clientId: 'eco_archers_car',
     );
     _setupCallbacks();
-    state.setMqttStatus(MqttStatus.connecting);
     _startFlushTimer();
     try {
       await _transport.connect();
@@ -232,7 +255,6 @@ class MqttService {
       debugPrint('MQTT Connection to $newHost failed: $e');
       _transport.disconnect();
       state.setServerConnectionState(false);
-      state.setMqttStatus(MqttStatus.disconnected);
     }
   }
 
@@ -246,13 +268,11 @@ class MqttService {
     await _localSpoolService.prunePublishedDecodedEventsOlderThan(
       const Duration(days: 7),
     );
-    await _localSpoolService.pruneRawFramesOlderThan(const Duration(days: 7));
     final readableRetentionDays = state.readableCopyRetentionDays.clamp(1, 30);
     await _localSpoolService.pruneReadableCopyOlderThan(
       Duration(days: readableRetentionDays),
     );
     await _hydratePendingPublishesFromSpool();
-    state.setMqttStatus(MqttStatus.connecting);
     _startFlushTimer();
     try {
       debugPrint('Connecting to MQTT via Tailscale...');
@@ -267,7 +287,6 @@ class MqttService {
       debugPrint('MQTT Connection Failed: $e');
       _transport.disconnect();
       state.setServerConnectionState(false);
-      state.setMqttStatus(MqttStatus.disconnected);
     }
   }
 
@@ -278,7 +297,6 @@ class MqttService {
     _flushTimer = null;
     _transport.disconnect();
     state.setServerConnectionState(false);
-    state.setMqttStatus(MqttStatus.disconnected);
   }
 
   String get _activeSessionId {
@@ -343,6 +361,7 @@ class MqttService {
     );
   }
 
+  @visibleForTesting
   TelemetryEventBatchPayload buildCanonicalBatchContract({
     required String metricName,
     required double value,
@@ -363,15 +382,16 @@ class MqttService {
 
   void _setupCallbacks() {
     _transport.onConnected = () {
-      state.setMqttStatus(MqttStatus.connected); // <--- Update state
       state.setServerConnectionState(true);
       unawaited(_hydratePendingPublishesFromSpool());
       unawaited(_flushPendingPublishes());
       unawaited(_flushCanonicalEventBuffer(drainAll: true));
+      // Re-publishes session metadata if the previous attempt was never
+      // handed off (e.g. the spool was unavailable). Deduped otherwise.
+      publishSessionMetadata();
     };
 
     _transport.onDisconnected = () {
-      state.setMqttStatus(MqttStatus.disconnected); // <--- Update state
       state.setServerConnectionState(false);
     };
   }
@@ -389,35 +409,39 @@ class MqttService {
     });
   }
 
-  Future<void> _publishOrQueue({
+  Future<bool> _publishOrQueue({
     required String topic,
     required String payloadJson,
     String? sessionId,
     int? seqInSessionStart,
     int? seqInSessionEnd,
   }) async {
-    if (_isConnected) {
-      await _flushPendingPublishes();
-      if (_publishDirect(topic: topic, payloadJson: payloadJson)) {
-        return;
+    try {
+      if (_isConnected) {
+        await _flushPendingPublishes();
+        if (_publishDirect(topic: topic, payloadJson: payloadJson)) {
+          return true;
+        }
       }
-    }
 
-    await _enqueuePending(
-      topic: topic,
-      payloadJson: payloadJson,
-      sessionId: sessionId,
-      seqInSessionStart: seqInSessionStart,
-      seqInSessionEnd: seqInSessionEnd,
-    );
+      await _enqueuePending(
+        topic: topic,
+        payloadJson: payloadJson,
+        sessionId: sessionId,
+        seqInSessionStart: seqInSessionStart,
+        seqInSessionEnd: seqInSessionEnd,
+      );
+      return true;
+    } catch (e) {
+      debugPrint('MQTT publish/queue failed, message not handed off: $e');
+      return false;
+    }
   }
 
   bool _publishDirect({required String topic, required String payloadJson}) {
     try {
       final sent = _transport.publish(topic: topic, payloadJson: payloadJson);
-      if (sent) {
-        state.notifyMqttTxSuccess();
-      } else {
+      if (!sent) {
         debugPrint('MQTT publish failed, buffering payload.');
       }
       return sent;
@@ -596,6 +620,10 @@ class MqttService {
         final Map<String, dynamic> sparsePayload = {
           'session_uid': chunk.first.sessionId,
           'lap_number': chunk.first.lapNumber,
+          'ts_wall_utc': chunk.first.tsWallUtc.toUtc().toIso8601String(),
+          'ts_session_ms': chunk.first.tsSessionMs,
+          'seq_in_session_start': chunk.first.seqInSession,
+          'seq_in_session_end': chunk.last.seqInSession,
         };
         for (final event in chunk) {
           sparsePayload[event.metricKey] = event.value;
@@ -644,6 +672,15 @@ class MqttService {
       pendingBatchCount: _pendingPublishes.length,
       pendingBatchCapacity: maxPendingPublishes,
     );
+  }
+
+  Future<void> resetSpool() async {
+    _pendingPublishes.clear();
+    _canonicalEventBuffer.clear();
+    await _localSpoolService.clearSpoolBatches();
+    await _localSpoolService.clearDecodedEvents();
+    _syncSpoolWarningState();
+    _syncBacklogState();
   }
 
   @visibleForTesting
@@ -759,46 +796,28 @@ class MqttService {
     }
     _lastPublishedValues[metricName] = value;
 
-    if (publishCanonicalTopic) {
-      final event = _buildDecodedMetricEvent(
-        metricName: metricName,
-        value: value,
-        source: source,
-        unit: unit,
-        canId: canId,
-      );
+    final event = _buildDecodedMetricEvent(
+      metricName: metricName,
+      value: value,
+      source: source,
+      unit: unit,
+      canId: canId,
+    );
 
-      unawaited(
-        _localSpoolService.enqueueDecodedEvent(
-          sessionId: event.sessionId,
-          seqInSession: event.seqInSession,
-          eventJson: jsonEncode(event.toJson()),
-          enqueuedAtUtc: event.tsWallUtc,
-        ),
-      );
+    unawaited(
+      _localSpoolService.enqueueDecodedEvent(
+        sessionId: event.sessionId,
+        seqInSession: event.seqInSession,
+        eventJson: jsonEncode(event.toJson()),
+        enqueuedAtUtc: event.tsWallUtc,
+      ),
+    );
 
-      _canonicalEventBuffer.addLast(event);
-      _syncBacklogState();
+    _canonicalEventBuffer.addLast(event);
+    _syncBacklogState();
 
-      if (_canonicalEventBuffer.length >= maxBatchEvents) {
-        unawaited(_flushCanonicalEventBuffer(drainAll: true));
-      }
-    }
-
-    if (publishLegacyRawTopic) {
-      final legacyPayload = {
-        'session_id': state.sessionId,
-        'session_name': state.sessionName,
-        'can_id': metricName,
-        'value': value,
-      };
-
-      unawaited(
-        _publishOrQueue(
-          topic: legacyRawTopic,
-          payloadJson: jsonEncode(legacyPayload),
-        ),
-      );
+    if (_canonicalEventBuffer.length >= maxBatchEvents) {
+      unawaited(_flushCanonicalEventBuffer(drainAll: true));
     }
   }
 }

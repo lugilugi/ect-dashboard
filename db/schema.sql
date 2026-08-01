@@ -1,3 +1,8 @@
+-- Enable TimescaleDB (required for hypertables/compression below). The
+-- timescale/timescaledb image creates it automatically; plain postgres
+-- bases (e.g. ops/backend/Dockerfile) rely on this line.
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
 -- Enable UUID generation extension if not active
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -20,12 +25,23 @@ CREATE TABLE laps (
 );
 
 -- 3. Core Time-Series Sink Table
+-- NOTE ON TYPES: telegraf's outputs.postgresql plugin (>=1.31, pgx v4) writes
+-- rows via `COPY ... FROM STDIN BINARY`, encoding every metric TAG as a
+-- string against the column's declared type. A pre-created table whose tag
+-- columns are uuid/int/bigint fails with "08P01: insufficient data left in
+-- message" (the binary length doesn't match what the server's input function
+-- expects). Tags therefore MUST be TEXT here; cast in queries when numeric
+-- semantics are needed (see BACKEND_GUIDE.md §10). `value` (field, float)
+-- and `time` (timestamptz, 8-byte binary) keep their natural types.
 CREATE TABLE telemetry_raw (
     time TIMESTAMPTZ NOT NULL,
-    session_uid UUID NOT NULL,
-    lap_number INT NOT NULL,
+    session_uid TEXT NOT NULL,
+    lap_number TEXT NOT NULL,
     signal_name TEXT NOT NULL,
-    value DOUBLE PRECISION NOT NULL
+    value DOUBLE PRECISION NOT NULL,
+    ts_session_ms TEXT,
+    seq_in_session_start TEXT,
+    seq_in_session_end TEXT
 );
 
 -- 4. Convert table to a TimescaleDB Hypertable partitioned by time slices
@@ -54,11 +70,17 @@ EXCEPTION
 END $$;
 
 -- 8. Writable Ingestion View & Trigger for Sessions UPSERT
+-- The view is the telegraf COPY target, so its columns must match what the
+-- plugin writes: uid arrives as a string (text), session_name as text.
+-- vehicle_setup is a JSONB column in the base table but cannot be populated
+-- through this pipeline (telegraf json_v2 cannot stringify a nested object),
+-- so it is intentionally left out of the ingest contract.
 CREATE OR REPLACE VIEW sessions_ingest_view AS
 SELECT
-  uid,
+  uid::text AS uid,
   session_name,
-  vehicle_setup
+  vehicle_setup,
+  created_at AS time
 FROM sessions;
 
 CREATE OR REPLACE FUNCTION upsert_session_ingest()
@@ -70,7 +92,7 @@ BEGIN
     vehicle_setup
   )
   VALUES (
-    NEW.uid,
+    NEW.uid::uuid,
     COALESCE(NEW.session_name, 'UNKNOWN_SESSION'),
     NEW.vehicle_setup
   )

@@ -14,7 +14,7 @@ Write-Host "==================================================" -ForegroundColor
 Write-Host "    ECT Telemetry TimescaleDB -> CSV Export" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
-$tables = @("sessions", "laps", "telemetry_events", "lap_events", "raw_can_frames", "tx_command_audit", "recovery_events")
+$tables = @("sessions", "laps", "telemetry_raw")
 
 # Check if docker is running and ect-timescaledb container is active
 $dockerRunning = $false
@@ -33,9 +33,9 @@ if ($dockerRunning) {
     Write-Host "--------------------------------------------------"
 
     foreach ($table in $tables) {
-        Write-Host "Exporting telemetry.$table..."
+        Write-Host "Exporting $table..."
         # Run docker exec and redirect output to local file
-        docker exec -i ect-timescaledb psql -U postgres -d telemetry -c "\copy (SELECT * FROM telemetry.$table) TO STDOUT WITH CSV HEADER" | Out-File -FilePath "$ExportDir/$table.csv" -Encoding utf8
+        docker exec -i ect-timescaledb psql -U postgres -d telemetry -c "\copy (SELECT * FROM $table) TO STDOUT WITH CSV HEADER" | Out-File -FilePath "$ExportDir/$table.csv" -Encoding utf8
     }
 } else {
     # Fallback to local psql
@@ -51,8 +51,8 @@ if ($dockerRunning) {
     Write-Host "--------------------------------------------------"
 
     foreach ($table in $tables) {
-        Write-Host "Exporting telemetry.$table..."
-        psql -h $DbHost -p $DbPort -d $DbName -U $DbUser -c "\copy (SELECT * FROM telemetry.$table) TO '$ExportDir/$table.csv' WITH CSV HEADER"
+        Write-Host "Exporting $table..."
+        psql -h $DbHost -p $DbPort -d $DbName -U $DbUser -c "\copy (SELECT * FROM $table) TO '$ExportDir/$table.csv' WITH CSV HEADER"
     }
 }
 

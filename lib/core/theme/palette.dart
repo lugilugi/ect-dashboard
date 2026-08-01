@@ -8,7 +8,6 @@ class Palette {
   Palette(this.light);
 
   Color get bg => light ? const Color(0xFFF5F5F5) : Colors.black;
-  Color get panel => light ? Colors.white : Colors.transparent;
   Color get border => light ? Colors.black26 : Colors.white24;
   Color get dimText => light ? Colors.black54 : Colors.white54;
   Color get mainText => light ? Colors.black : Colors.white;

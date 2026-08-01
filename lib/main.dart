@@ -149,8 +149,6 @@ class _TelemetryAppState extends ConsumerState<TelemetryApp> {
     super.dispose();
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     return const DashboardScreen();

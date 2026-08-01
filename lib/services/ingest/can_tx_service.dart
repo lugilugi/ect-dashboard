@@ -84,7 +84,9 @@ class CanTxService {
     final definition = validation.definition!;
     final inDriverMode = isDriverMode?.call() ?? true;
     final loggingActive = isLogging?.call() ?? false;
-    if (inDriverMode && loggingActive && definition.safetyClass != CanTxSafetyClass.emergency) {
+    if (inDriverMode &&
+        loggingActive &&
+        definition.safetyClass == CanTxSafetyClass.maintenance) {
       final rejected = TxCommandResult(
         status: TxCommandStatus.rejected,
         sequence: null,

@@ -58,6 +58,45 @@ class PlatformDriverAlertOutput implements DriverAlertOutput {
   }
 }
 
+/// Android cue output backed by a native MethodChannel.
+///
+/// Flutter's [SystemSound] is a no-op on Android, so audio cues are produced
+/// by a ToneGenerator on the platform side; haptics use the Vibrator with
+/// severity-specific patterns.
+class AndroidAlertOutput implements DriverAlertOutput {
+  static const MethodChannel _channel = MethodChannel('ect_dashboard/alert_cue');
+
+  @override
+  Future<void> playAudio({
+    required DriverAlertSeverity severity,
+    required double volume,
+  }) async {
+    try {
+      await _channel.invokeMethod<void>('playAudio', <String, Object?>{
+        'severity': severity.wireValue,
+        'volume': volume.clamp(0.0, 1.0),
+      });
+    } on PlatformException catch (e) {
+      debugPrint('Android alert audio failed: ${e.message}');
+    } on MissingPluginException catch (e) {
+      debugPrint('Android alert audio unavailable: ${e.message}');
+    }
+  }
+
+  @override
+  Future<void> playHaptic({required DriverAlertSeverity severity}) async {
+    try {
+      await _channel.invokeMethod<void>('playHaptic', <String, Object?>{
+        'severity': severity.wireValue,
+      });
+    } on PlatformException catch (e) {
+      debugPrint('Android alert haptic failed: ${e.message}');
+    } on MissingPluginException catch (e) {
+      debugPrint('Android alert haptic unavailable: ${e.message}');
+    }
+  }
+}
+
 class DriverAlertService {
   final DashboardState _state;
   final DriverAlertOutput _output;
@@ -68,6 +107,7 @@ class DriverAlertService {
   _AlertSnapshot? _snapshot;
 
   final Map<String, DateTime> _lastAlertAtByCode = <String, DateTime>{};
+  final Map<String, bool> _activeVariableViolations = <String, bool>{};
   Timer? _criticalRepeatTimer;
 
   DriverAlertService({
@@ -75,8 +115,15 @@ class DriverAlertService {
     DriverAlertOutput? output,
     DateTime Function()? nowProvider,
   }) : _state = state,
-       _output = output ?? PlatformDriverAlertOutput(),
+       _output = output ?? _defaultOutput(),
        _nowProvider = nowProvider ?? (() => DateTime.now().toUtc());
+
+  static DriverAlertOutput _defaultOutput() {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidAlertOutput();
+    }
+    return PlatformDriverAlertOutput();
+  }
 
   void start() {
     if (_running) {
@@ -125,6 +172,9 @@ class DriverAlertService {
         _handleConnectivity(previous: previous, next: next);
         _handleFaults(previous: previous, next: next);
         _handleLapEvents(previous: previous, next: next);
+        _handleVariables();
+      } else {
+        _activeVariableViolations.clear();
       }
 
       _snapshot = next;
@@ -270,6 +320,56 @@ class DriverAlertService {
       return 'CROSS_TIMING';
     }
     return 'CROSS_FILTER';
+  }
+
+  void _handleVariables() {
+    for (final spec in alertVariableSpecs) {
+      final settings = _state.alertVariables[spec.key];
+      if (settings == null || !settings.enabled) {
+        _activeVariableViolations['${spec.key.wireValue}_MIN'] = false;
+        _activeVariableViolations['${spec.key.wireValue}_MAX'] = false;
+        continue;
+      }
+
+      final value = _state.alertVariableValue(spec.key);
+      final minKey = '${spec.key.wireValue}_MIN';
+      final maxKey = '${spec.key.wireValue}_MAX';
+
+      if (value == spec.restValue) {
+        _activeVariableViolations[minKey] = false;
+        _activeVariableViolations[maxKey] = false;
+        continue;
+      }
+
+      if (value < settings.minThreshold) {
+        if (_activeVariableViolations[minKey] != true) {
+          _activeVariableViolations[minKey] = true;
+          _activeVariableViolations[maxKey] = false;
+          unawaited(
+            _emitAlert(
+              alertCode: 'var_${spec.key.wireValue.toLowerCase()}_min',
+              severity: spec.severity,
+              reasonClass: 'VAR_$minKey',
+            ),
+          );
+        }
+      } else if (value > settings.maxThreshold) {
+        if (_activeVariableViolations[maxKey] != true) {
+          _activeVariableViolations[minKey] = false;
+          _activeVariableViolations[maxKey] = true;
+          unawaited(
+            _emitAlert(
+              alertCode: 'var_${spec.key.wireValue.toLowerCase()}_max',
+              severity: spec.severity,
+              reasonClass: 'VAR_$maxKey',
+            ),
+          );
+        }
+      } else {
+        _activeVariableViolations[minKey] = false;
+        _activeVariableViolations[maxKey] = false;
+      }
+    }
   }
 
   Future<void> _emitAlert({

@@ -1,1 +1,0 @@
-﻿session_id,lap_number,started_at_utc,ended_at_utc,duration_ms,lap_phase,crossing_detected,crossing_valid,deadzone_applied,deadzone_ms,crossing_speed_kmh,detection_method,detection_confidence,crossing_lat,crossing_lon,crossing_heading_deg,created_at_utc

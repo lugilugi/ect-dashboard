@@ -189,38 +189,6 @@ void main() {
       },
     );
 
-    test('raw frame insert and age pruning are bounded', () async {
-      final spool = LocalSpoolService(
-        forceInMemory: true,
-        maxPendingBatches: 10,
-      );
-
-      await spool.initialize();
-
-      await spool.enqueueRawFrame(
-        sessionId: 'session-3',
-        tsSessionMs: 1000,
-        canId: 0x110,
-        payloadHex: 'AA55',
-        source: 'usb',
-        tsWallUtc: DateTime.now().toUtc().subtract(const Duration(days: 3)),
-      );
-      await spool.enqueueRawFrame(
-        sessionId: 'session-3',
-        tsSessionMs: 2000,
-        canId: 0x310,
-        payloadHex: 'BB66',
-        source: 'usb',
-      );
-
-      expect(await spool.rawFrameCount(), 2);
-
-      await spool.pruneRawFramesOlderThan(const Duration(days: 1));
-      expect(await spool.rawFrameCount(), 1);
-
-      await spool.close();
-    });
-
     test('session checkpoint can be saved, read, and cleared', () async {
       final spool = LocalSpoolService(
         forceInMemory: true,
@@ -273,13 +241,6 @@ void main() {
           sessionId: 'session-readable-1',
           seqInSession: 1,
           eventJson: '{"metric_key":"Speed_Kmh","metric_value":12.3}',
-        );
-        await spool.enqueueRawFrame(
-          sessionId: 'session-readable-1',
-          tsSessionMs: 1000,
-          canId: 0x500,
-          payloadHex: 'A1B2C3D4',
-          source: 'usb',
         );
 
         final mirrorPath = spool.readableCopyPath;

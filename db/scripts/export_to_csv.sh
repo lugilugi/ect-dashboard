@@ -13,7 +13,7 @@ echo "=================================================="
 echo "    ECT Telemetry TimescaleDB -> CSV Export"
 echo "=================================================="
 
-tables=("sessions" "laps" "telemetry_events" "lap_events" "raw_can_frames" "tx_command_audit" "recovery_events")
+tables=("sessions" "laps" "telemetry_raw")
 
 # Check if docker is running and ect-timescaledb container is active
 if docker ps --format '{{.Names}}' | grep -q "^ect-timescaledb$"; then
@@ -21,8 +21,8 @@ if docker ps --format '{{.Names}}' | grep -q "^ect-timescaledb$"; then
   echo "Exporting to: $EXPORT_DIR/"
   echo "--------------------------------------------------"
   for table in "${tables[@]}"; do
-    echo "Exporting telemetry.$table..."
-    docker exec -i ect-timescaledb psql -U postgres -d telemetry -c "\copy (SELECT * FROM telemetry.$table) TO STDOUT WITH CSV HEADER" > "$EXPORT_DIR/$table.csv"
+    echo "Exporting $table..."
+    docker exec -i ect-timescaledb psql -U postgres -d telemetry -c "\copy (SELECT * FROM $table) TO STDOUT WITH CSV HEADER" > "$EXPORT_DIR/$table.csv"
   done
 else
   # Fallback to local psql
@@ -37,8 +37,8 @@ else
   echo "Exporting to: $EXPORT_DIR/"
   echo "--------------------------------------------------"
   for table in "${tables[@]}"; do
-    echo "Exporting telemetry.$table..."
-    psql -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -U "$DB_USER" -c "\copy (SELECT * FROM telemetry.$table) TO '$EXPORT_DIR/$table.csv' WITH CSV HEADER"
+    echo "Exporting $table..."
+    psql -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -U "$DB_USER" -c "\copy (SELECT * FROM $table) TO '$EXPORT_DIR/$table.csv' WITH CSV HEADER"
   done
 fi
 

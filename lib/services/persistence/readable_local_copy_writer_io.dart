@@ -51,7 +51,7 @@ class ReadableLocalCopyWriter {
     if (root == null) {
       return null;
     }
-    return p.join(root.path, 'session_csv');
+    return root.path;
   }
 
   void setMaxFileBytes(int value) {
@@ -70,7 +70,7 @@ class ReadableLocalCopyWriter {
         ? override
         : (baseDirectoryPath == null || baseDirectoryPath.isEmpty)
         ? null
-        : p.join(baseDirectoryPath, 'readable_local_copy');
+        : p.join(baseDirectoryPath, 'session_csv');
 
     if (resolvedPath == null) {
       _rootDirectory = null;
@@ -93,7 +93,7 @@ class ReadableLocalCopyWriter {
       return null;
     }
 
-    final csvRoot = Directory(sessionCsvDirectoryPath!);
+    final csvRoot = root;
     if (!await csvRoot.exists()) {
       await csvRoot.create(recursive: true);
     }
@@ -194,7 +194,7 @@ class ReadableLocalCopyWriter {
         (exportRootDirectoryPath != null &&
             exportRootDirectoryPath.trim().isNotEmpty)
         ? exportRootDirectoryPath.trim()
-        : p.join(root.parent.path, 'readable_local_copy_exports');
+        : p.join(root.parent.path, 'session_csv_exports');
     final exportRoot = Directory(exportRootPath);
     if (!await exportRoot.exists()) {
       await exportRoot.create(recursive: true);
@@ -237,6 +237,23 @@ class ReadableLocalCopyWriter {
       final stat = await entity.stat();
       if (stat.modified.toUtc().isBefore(cutoff)) {
         await entity.delete();
+      }
+    }
+  }
+
+  Future<void> clearAllFiles() async {
+    final root = _rootDirectory;
+    if (root == null || !await root.exists()) {
+      return;
+    }
+
+    final files = await _listReadableFiles(root);
+    for (final entity in files) {
+      try {
+        await entity.delete();
+      } catch (_) {
+        // Ignore individual file failures so one locked file
+        // does not abort the whole clear.
       }
     }
   }

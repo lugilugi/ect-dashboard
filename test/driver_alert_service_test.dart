@@ -211,4 +211,98 @@ void main() {
       state.dispose();
     });
   });
+
+  group('DriverAlertService variable alerts', () {
+    test('emits critical alert when a variable exceeds its max threshold', () async {
+      final state = DashboardState();
+      final output = _FakeAlertOutput();
+      final service = DriverAlertService(state: state, output: output);
+      service.start();
+
+      state.restoreFromCheckpoint(_loggingSnapshot(sessionId: 'session-var-1'));
+      state.setAlertHapticsEnabled(false);
+
+      state.mcTempC = 90;
+      state.notifyListeners();
+      await _drainQueue();
+
+      expect(output.audioCount(DriverAlertSeverity.critical), 1);
+      expect(state.lastAlertCode, 'var_mc_temp_max');
+      expect(state.lastAlertReasonClass, 'VAR_MC_TEMP_MAX');
+
+      service.stop();
+      state.dispose();
+    });
+
+    test('emits warning alert when a variable drops below its min threshold', () async {
+      final state = DashboardState();
+      final output = _FakeAlertOutput();
+      final service = DriverAlertService(state: state, output: output);
+      service.start();
+
+      state.restoreFromCheckpoint(_loggingSnapshot(sessionId: 'session-var-2'));
+      state.setAlertHapticsEnabled(false);
+
+      state.mainVoltage = 20;
+      state.notifyListeners();
+      await _drainQueue();
+
+      expect(output.audioCount(DriverAlertSeverity.warning), 1);
+      expect(state.lastAlertCode, 'var_voltage_min');
+      expect(state.lastAlertReasonClass, 'VAR_VOLTAGE_MIN');
+
+      service.stop();
+      state.dispose();
+    });
+
+    test('does not alert for disabled variables', () async {
+      final state = DashboardState();
+      final output = _FakeAlertOutput();
+      final service = DriverAlertService(state: state, output: output);
+      service.start();
+
+      state.restoreFromCheckpoint(_loggingSnapshot(sessionId: 'session-var-3'));
+      state.setAlertHapticsEnabled(false);
+      state.setAlertVariableEnabled(AlertVariableKey.voltage, false);
+
+      state.mainVoltage = 20;
+      state.notifyListeners();
+      await _drainQueue();
+
+      expect(output.audioCount(DriverAlertSeverity.warning), 0);
+      expect(output.audioCount(DriverAlertSeverity.critical), 0);
+
+      service.stop();
+      state.dispose();
+    });
+
+    test('re-alerts only after the value returns inside thresholds', () async {
+      final state = DashboardState();
+      final output = _FakeAlertOutput();
+      final service = DriverAlertService(state: state, output: output);
+      service.start();
+
+      state.restoreFromCheckpoint(_loggingSnapshot(sessionId: 'session-var-4'));
+      state.setAlertHapticsEnabled(false);
+      state.setAlertCooldownMs(0);
+
+      state.mcTempC = 90;
+      state.notifyListeners();
+      await _drainQueue();
+      expect(output.audioCount(DriverAlertSeverity.critical), 1);
+
+      state.mcTempC = 40;
+      state.notifyListeners();
+      await _drainQueue();
+      expect(output.audioCount(DriverAlertSeverity.critical), 1);
+
+      state.mcTempC = 95;
+      state.notifyListeners();
+      await _drainQueue();
+      expect(output.audioCount(DriverAlertSeverity.critical), 2);
+
+      service.stop();
+      state.dispose();
+    });
+  });
 }

@@ -1,44 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
-// =============================================================================
-// Rolling Graph Custom Painter
-// =============================================================================
-class GraphPainter extends CustomPainter {
-  final List<double> data;
-  final Palette p;
-  GraphPainter(this.data, this.p);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (data.length < 2) return;
-    final maxVal = data.reduce(max);
-    final minVal = data.reduce(min);
-    final range = maxVal - minVal;
-    if (range <= 0) return;
-
-    final paint = Paint()
-      ..color = p.cyan
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeJoin = StrokeJoin.round;
-
-    final path = Path();
-    for (int i = 0; i < data.length; i++) {
-      final x = (i / (data.length - 1)) * size.width;
-      final y = size.height - ((data[i] - minVal) / range) * size.height;
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-    }
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant GraphPainter old) => true;
-}
 
 class ThrottleMapPainter extends CustomPainter {
   final Palette p;
@@ -173,10 +135,4 @@ class ThrottleMapPainter extends CustomPainter {
     return oldDelegate.p.light != p.light;
   }
 }
-
-// =============================================================================
-// PAGE 3: CONFIG / SETTINGS
-// =============================================================================
-
-
 

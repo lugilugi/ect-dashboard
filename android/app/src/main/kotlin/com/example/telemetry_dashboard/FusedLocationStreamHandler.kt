@@ -4,6 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.GnssStatus
+import android.location.LocationManager
+import android.os.Build
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -23,6 +26,8 @@ class FusedLocationStreamHandler(
 
     private var eventSink: EventChannel.EventSink? = null
     private var locationCallback: LocationCallback? = null
+    private var gnssStatusCallback: GnssStatus.Callback? = null
+    private var lastSatellitesUsed = -1
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         eventSink = events
@@ -63,6 +68,8 @@ class FusedLocationStreamHandler(
             return
         }
 
+        registerGnssStatusListener()
+
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
             REQUEST_INTERVAL_MS,
@@ -90,6 +97,7 @@ class FusedLocationStreamHandler(
                         },
                         "timestampMs" to location.time,
                         "provider" to (location.provider ?: "fused"),
+                        "satellites" to lastSatellitesUsed,
                     )
                     eventSink?.success(payload)
                 }
@@ -125,6 +133,59 @@ class FusedLocationStreamHandler(
         val callback = locationCallback ?: return
         fusedLocationClient.removeLocationUpdates(callback)
         locationCallback = null
+        unregisterGnssStatusListener()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun registerGnssStatusListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return
+        }
+
+        val locationManager =
+            context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                ?: return
+
+        if (gnssStatusCallback != null) {
+            return
+        }
+
+        val callback = object : GnssStatus.Callback() {
+            override fun onSatelliteStatusChanged(status: GnssStatus) {
+                var usedInFix = 0
+                for (index in 0 until status.satelliteCount) {
+                    if (status.usedInFix(index)) {
+                        usedInFix++
+                    }
+                }
+                lastSatellitesUsed = usedInFix
+            }
+        }
+
+        try {
+            locationManager.registerGnssStatusCallback(callback)
+            gnssStatusCallback = callback
+        } catch (securityException: SecurityException) {
+            debugPrint("GNSS status callback registration failed: $securityException")
+            gnssStatusCallback = null
+        }
+    }
+
+    private fun unregisterGnssStatusListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return
+        }
+
+        val callback = gnssStatusCallback ?: return
+        val locationManager =
+            context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                ?: return
+        locationManager.unregisterGnssStatusCallback(callback)
+        gnssStatusCallback = null
+    }
+
+    private fun debugPrint(message: String) {
+        android.util.Log.d("FusedLocationStreamHandler", message)
     }
 
     companion object {

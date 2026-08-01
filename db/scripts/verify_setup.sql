@@ -1,50 +1,42 @@
 -- verify_setup.sql
--- Run after migrations to confirm schema/index/policy readiness.
+-- Run after db/schema.sql to confirm schema/index/policy readiness.
 
-\echo '=== Tables in telemetry schema ==='
+\echo '=== Tables in public schema ==='
 SELECT table_name
 FROM information_schema.tables
-WHERE table_schema = 'telemetry'
+WHERE table_schema = 'public'
+  AND table_type = 'BASE TABLE'
 ORDER BY table_name;
 
 \echo '=== Hypertables ==='
 SELECT hypertable_name
 FROM timescaledb_information.hypertables
-WHERE hypertable_schema = 'telemetry'
 ORDER BY hypertable_name;
 
-\echo '=== Indexes on telemetry_events ==='
+\echo '=== Indexes on telemetry_raw ==='
 SELECT indexname
 FROM pg_indexes
-WHERE schemaname = 'telemetry'
-  AND tablename = 'telemetry_events'
+WHERE schemaname = 'public'
+  AND tablename = 'telemetry_raw'
 ORDER BY indexname;
 
 \echo '=== Compression/Retention Jobs ==='
 SELECT
   j.job_id,
   j.proc_name,
-  j.schedule_interval,
-  c.hypertable_schema,
-  c.hypertable_name
+  j.schedule_interval
 FROM timescaledb_information.jobs j
-LEFT JOIN LATERAL (
-  SELECT
-    (j.config ->> 'hypertable_schema')::text AS hypertable_schema,
-    (j.config ->> 'hypertable_name')::text AS hypertable_name
-) c ON TRUE
 WHERE j.proc_name LIKE '%policy%'
 ORDER BY j.job_id;
 
-\echo '=== Summary Views ==='
+\echo '=== Ingestion Views ==='
 SELECT schemaname, viewname
 FROM pg_views
-WHERE schemaname = 'telemetry'
-  AND viewname IN ('session_summary_v1', 'lap_summary_v1', 'latest_metric_values_v1')
+WHERE schemaname = 'public'
+  AND viewname = 'sessions_ingest_view'
 ORDER BY viewname;
 
 \echo '=== Sanity counts ==='
-SELECT COUNT(*) AS session_rows FROM telemetry.sessions;
-SELECT COUNT(*) AS lap_rows FROM telemetry.laps;
-SELECT COUNT(*) AS event_rows FROM telemetry.telemetry_events;
-SELECT COUNT(*) AS lap_event_rows FROM telemetry.lap_events;
+SELECT COUNT(*) AS session_rows FROM sessions;
+SELECT COUNT(*) AS lap_rows FROM laps;
+SELECT COUNT(*) AS raw_rows FROM telemetry_raw;

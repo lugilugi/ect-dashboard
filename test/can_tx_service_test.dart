@@ -91,14 +91,19 @@ void main() {
       service.dispose();
     });
 
-    test('rejects non-emergency command in driver logging mode', () async {
+    test('allows operational command in driver logging mode', () async {
+      final sentFrames = <String>[];
       final dictionary = CommandDictionaryService();
 
       final service = CanTxService(
         dictionaryService: dictionary,
-        sendRawFrame: (_) {},
+        sendRawFrame: (frame) {
+          sentFrames.add(frame);
+        },
         isDriverMode: () => true,
         isLogging: () => true,
+        ackTimeout: const Duration(milliseconds: 40),
+        maxRetries: 0,
       );
 
       final command = TxCanCommand(
@@ -110,10 +115,94 @@ void main() {
         safetyTag: CanTxSafetyClass.operational,
       );
 
+      final result = await service
+          .sendCommand(command)
+          .timeout(const Duration(milliseconds: 300));
+
+      expect(result.status, isNot(TxCommandStatus.rejected));
+      expect(sentFrames.length, 1);
+      expect(sentFrames.first.startsWith('C|v1|1|12|'), isTrue);
+      service.dispose();
+    });
+
+    test('rejects maintenance command in driver logging mode', () async {
+      final dictionary = _MaintenanceDictionary();
+
+      final service = CanTxService(
+        dictionaryService: dictionary,
+        sendRawFrame: (_) {},
+        isDriverMode: () => true,
+        isLogging: () => true,
+      );
+
+      final command = TxCanCommand(
+        commandKey: 'SET_CONFIG',
+        args: const <int>[],
+        targetCanId: 0x210,
+        issuedAtMsUtc: DateTime.now().millisecondsSinceEpoch,
+        source: 'test',
+        safetyTag: CanTxSafetyClass.maintenance,
+      );
+
       final result = await service.sendCommand(command);
       expect(result.status, TxCommandStatus.rejected);
       expect(result.reason, 'blocked_in_driver_logging_mode');
       service.dispose();
     });
+
+    test('allows maintenance command when not logging', () async {
+      final sentFrames = <String>[];
+      final dictionary = _MaintenanceDictionary();
+
+      final service = CanTxService(
+        dictionaryService: dictionary,
+        sendRawFrame: (frame) {
+          sentFrames.add(frame);
+        },
+        isDriverMode: () => true,
+        isLogging: () => false,
+        ackTimeout: const Duration(milliseconds: 40),
+        maxRetries: 0,
+      );
+
+      final command = TxCanCommand(
+        commandKey: 'SET_CONFIG',
+        args: const <int>[],
+        targetCanId: 0x210,
+        issuedAtMsUtc: DateTime.now().millisecondsSinceEpoch,
+        source: 'test',
+        safetyTag: CanTxSafetyClass.maintenance,
+      );
+
+      final result = await service
+          .sendCommand(command)
+          .timeout(const Duration(milliseconds: 300));
+
+      expect(result.status, isNot(TxCommandStatus.rejected));
+      expect(sentFrames.length, 1);
+      service.dispose();
+    });
   });
+}
+
+class _MaintenanceDictionary extends CommandDictionaryService {
+  static const maintenanceDefinition = CommandDefinition(
+    key: 'SET_CONFIG',
+    commandCode: 0x20,
+    targetCanId: 0x210,
+    argSchema: <CommandArgSchema>[],
+    safetyClass: CanTxSafetyClass.maintenance,
+  );
+
+  @override
+  CommandValidationResult validate(TxCanCommand command) {
+    if (command.commandKey == 'SET_CONFIG') {
+      return const CommandValidationResult(
+        accepted: true,
+        reason: null,
+        definition: maintenanceDefinition,
+      );
+    }
+    return super.validate(command);
+  }
 }

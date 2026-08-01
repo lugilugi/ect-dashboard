@@ -1,17 +1,48 @@
 name: Android Release Build
 
 on:
-  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch: # Manual trigger from the Actions tab
   push:
     tags:
-      - '*' # Trigger on ANY pushed tag (e.g., v1.0, 1.0, release)
+      - '*' # e.g. v1.0.0
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build:
+  ci:
+    name: Analyze & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
-      contents: write # Needed to create a Release
-    
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-pub
+
+      - name: Run tests
+        run: flutter test --no-pub --reporter expanded
+
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    needs: ci # Release builds only after analyze + tests pass
+    timeout-minutes: 30
+    permissions:
+      contents: write # Needed to create a GitHub Release
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,16 +56,50 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
           cache: true
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Install dependencies
         run: flutter pub get
 
+      # Release signing: inject the keystore from repository secrets when
+      # configured. Without secrets the build falls back to the debug key
+      # (see android/app/build.gradle.kts), which is fine for local testing
+      # but CANNOT be installed as an update over a previously-signed APK:
+      # Android requires every update to be signed with the SAME key.
+      # Signing correctly is what lets you update the app in place from
+      # GitHub Releases instead of uninstalling and reinstalling.
+      - name: Decode release keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=upload-keystore.jks
+          EOF
+          chmod 600 android/key.properties
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "build_name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_name=1.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build APK
         run: |
-          flutter build apk --release --build-number=${{ github.run_number }}
-          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/ect-dashboard.apk
+          flutter build apk --release \
+            --build-name=${{ steps.version.outputs.build_name }} \
+            --build-number=${{ github.run_number }}
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             build/app/outputs/flutter-apk/ect-dashboard.apk
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -47,3 +112,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: build/app/outputs/flutter-apk/ect-dashboard.apk
+          generate_release_notes: true

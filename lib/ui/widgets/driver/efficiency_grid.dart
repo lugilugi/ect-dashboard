@@ -1,6 +1,5 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 
@@ -108,28 +107,17 @@ class EfficiencyGrid extends StatelessWidget {
                   ),
                 ),
 
-                // RIGHT COL: Avg Eff → Fault+Strategy → Rolling Graph
+                // RIGHT COL: Strat Marker → Avg Eff → Lap/Dist/Avg Speed → Session Time
                 Expanded(
                   flex: 3,
                   child: Column(
                     children: [
                       Expanded(
-                        child: _buildSplitCell(
-                          "AVG EFF. / ENERGY",
-                          state.avgKmPerKwh.toStringAsFixed(1).padLeft(5, '0'),
-                          "km/kWh",
-                          (state.energyJ780 / 3600.0)
-                              .toStringAsFixed(1)
-                              .padLeft(5, '0'),
-                          "Wh",
-                          leftBorder: true,
-                          bottomBorder: true,
-                          color1: p.lightGreen,
-                          color2: p.purple,
-                        ),
+                        child: _FlashingStratMarker(state: state, p: p),
                       ),
-                      Expanded(child: _buildFaultStrategyCell()),
-                      Expanded(child: _buildRollingGraph()),
+                      Expanded(child: _buildAvgEffCell()),
+                      Expanded(child: _buildLapDistAvgSpeedCell()),
+                      Expanded(child: _buildSessionTimeCell()),
                     ],
                   ),
                 ),
@@ -295,29 +283,11 @@ class EfficiencyGrid extends StatelessWidget {
   }
 
   // ---------------------------------------------------------------------------
-  // Combined Fault + Strategy Cell (right col, middle)
+  // AVG EFF (giant) + Total Energy (corner)
   // ---------------------------------------------------------------------------
-  Widget _buildFaultStrategyCell() {
-    final hasFault = state.lastErrorCode != "OK";
-    Color strategyColor = p.mainText;
-    if (state.strategy == "BURN") {
-      strategyColor = p.orange;
-    }
-    if (state.strategy == "REGEN") {
-      strategyColor = p.red;
-    }
-    if (state.strategy == "COAST") {
-      strategyColor = p.cyan;
-    }
-    if (state.strategy == "PACE") {
-      strategyColor = p.green;
-    }
-
+  Widget _buildAvgEffCell() {
     return Container(
       decoration: BoxDecoration(
-        color: hasFault
-            ? Colors.red.shade900.withValues(alpha: 0.8)
-            : Colors.transparent,
         border: Border(
           left: BorderSide(color: p.border, width: 1),
           bottom: BorderSide(color: p.border, width: 1),
@@ -326,68 +296,211 @@ class EfficiencyGrid extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Fault area (top half)
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                "AVG EFF",
+                style: TextStyle(
+                  color: p.dimText,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ),
+          ),
           Expanded(
-            flex: 1,
-            child: hasFault
-                ? Center(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Padding(
-                        padding: const EdgeInsets.all(4.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.error,
-                              color: Colors.red,
-                              size: 24,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              state.lastErrorCode,
-                              style: const TextStyle(
-                                color: Colors.red,
-                                fontFamily: 'monospace',
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
+            child: Stack(
+              children: [
+                Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          state.avgKmPerKwh.toStringAsFixed(1).padLeft(5, '0'),
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontFeatures: const [
+                              FontFeature.tabularFigures(),
+                            ],
+                            color: p.lightGreen,
+                            fontSize: 64,
+                            fontWeight: FontWeight.bold,
+                            height: 1.0,
+                          ),
                         ),
-                      ),
-                    ),
-                  )
-                : Center(
-                    child: Icon(
-                      Icons.check_circle_outline,
-                      color: p.border,
-                      size: 20,
+                        Text(
+                          "km/kWh",
+                          style: TextStyle(
+                            color: p.dimText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                ),
+                Positioned(
+                  right: 8,
+                  bottom: 6,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        "ENERGY",
+                        style: TextStyle(
+                          color: p.dimText,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                      Text(
+                        "${(state.energyJ780 / 3600.0).toStringAsFixed(1)} Wh",
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontFeatures: const [
+                            FontFeature.tabularFigures(),
+                          ],
+                          color: p.purple,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-          Container(height: 1, color: p.border),
-          // Strategy area (bottom half)
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // LAP / DISTANCE (left) | AVG SPEED (right)
+  // ---------------------------------------------------------------------------
+  Widget _buildLapDistAvgSpeedCell() {
+    final elapsedH = state.sessionTimeSeconds / 3600.0;
+    final avgSpeedKmh = elapsedH > 0 ? state.distanceKm / elapsedH : 0.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: p.border, width: 1),
+          bottom: BorderSide(color: p.border, width: 1),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Expanded(
-            flex: 1,
-            child: Container(
-              color: strategyColor.withValues(alpha: p.light ? 0.2 : 0.15),
-              child: Center(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                    child: Text(
-                      state.strategy,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _buildLabeledValue(
+                    label: "LAP",
+                    value: state.lapNumber.toString(),
+                    valueColor: p.pink,
+                    valueSize: 34,
+                  ),
+                ),
+                Container(width: 1, color: p.border),
+                Expanded(
+                  flex: 3,
+                  child: _buildLabeledValue(
+                    label: "DISTANCE",
+                    value: state.distanceKm.toStringAsFixed(2),
+                    valueColor: p.teal,
+                    valueSize: 34,
+                    unit: "km",
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(width: 1, color: p.border),
+          Expanded(
+            child: _buildLabeledValue(
+              label: "AVG SPEED",
+              value: avgSpeedKmh.toStringAsFixed(1).padLeft(4, '0'),
+              valueColor: p.lightGreen,
+              valueSize: 42,
+              unit: "km/h",
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Labeled Value Cell (top-left label + centered value/unit)
+  // ---------------------------------------------------------------------------
+  Widget _buildLabeledValue({
+    required String label,
+    required String value,
+    required Color valueColor,
+    double valueSize = 42,
+    String? unit,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: p.dimText,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      value,
                       style: TextStyle(
                         fontFamily: 'monospace',
-                        color: strategyColor,
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: valueColor,
+                        fontSize: valueSize,
+                        fontWeight: FontWeight.bold,
                         height: 1.0,
                       ),
                     ),
-                  ),
+                    if (unit != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        unit,
+                        style: TextStyle(
+                          color: p.dimText,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -398,9 +511,9 @@ class EfficiencyGrid extends StatelessWidget {
   }
 
   // ---------------------------------------------------------------------------
-  // Rolling Graph (right col, bottom)
+  // SESSION TIME (giant)
   // ---------------------------------------------------------------------------
-  Widget _buildRollingGraph() {
+  Widget _buildSessionTimeCell() {
     return Container(
       decoration: BoxDecoration(
         border: Border(left: BorderSide(color: p.border, width: 1)),
@@ -409,15 +522,15 @@ class EfficiencyGrid extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 8, top: 4, right: 8),
+            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
             child: FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
               child: Text(
-                "${state.graphMetric.toUpperCase()} HISTORY",
+                "SESSION TIME",
                 style: TextStyle(
                   color: p.dimText,
-                  fontSize: 10,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.0,
                 ),
@@ -425,96 +538,41 @@ class EfficiencyGrid extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(4.0),
-              child: _buildFlChartGraph(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFlChartGraph() {
-    final data = state.graphHistory.toList();
-    if (data.length < 2) return const SizedBox();
-
-    final double gMin = state.graphYMin;
-    final double gMax = state.graphYMax;
-    final range = gMax - gMin == 0 ? 1.0 : gMax - gMin;
-
-    final spots = <FlSpot>[];
-    for (int i = 0; i < data.length; i++) {
-      spots.add(FlSpot(i.toDouble(), data[i]));
-    }
-
-    // Fixed color as requested
-    Color lineColor = p.cyan;
-
-    return LineChart(
-      LineChartData(
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: true,
-          horizontalInterval: max(range / 4, 1.0),
-          getDrawingHorizontalLine: (value) {
-            return FlLine(
-              color: p.border.withValues(alpha: 0.5),
-              strokeWidth: 1,
-            );
-          },
-          getDrawingVerticalLine: (value) {
-            return FlLine(
-              color: p.border.withValues(alpha: 0.5),
-              strokeWidth: 1,
-            );
-          },
-        ),
-        titlesData: FlTitlesData(
-          show: true,
-          rightTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          topTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          bottomTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              interval: max(range / 2, 1.0),
-              reservedSize: 32,
-              getTitlesWidget: (value, meta) {
-                return Text(
-                  value.toStringAsFixed(0),
-                  style: TextStyle(
-                    color: p.dimText,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-        borderData: FlBorderData(show: false),
-        minX: 0,
-        maxX: (data.length - 1).toDouble(),
-        minY: gMin,
-        maxY: gMax,
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            color: lineColor,
-            barWidth: 2,
-            isStrokeCapRound: true,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              color: lineColor.withValues(alpha: 0.2),
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      state.sessionTimeString,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontFeatures: const [
+                          FontFeature.tabularFigures(),
+                        ],
+                        color: p.amber,
+                        fontSize: 42,
+                        fontWeight: FontWeight.bold,
+                        height: 1.0,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      state.systemTimeString,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontFeatures: const [
+                          FontFeature.tabularFigures(),
+                        ],
+                        color: p.amber,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -831,145 +889,185 @@ class EfficiencyGrid extends StatelessWidget {
   // ---------------------------------------------------------------------------
   Widget _buildBottomCenterMetrics(DashboardState state) {
     Color instEffColor = state.strategy == "REGEN" ? p.cyan : p.mainText;
-    return Row(
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // LEFT HALF: INSTANT EFFICIENCY (swapped from speed)
-        Expanded(
-          flex: 4,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    "INSTANT km/kWh",
-                    style: TextStyle(
-                      color: p.dimText,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.0,
-                    ),
-                  ),
-                ),
+        Padding(
+          padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              "INSTANT km/kWh",
+              style: TextStyle(
+                color: p.dimText,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.0,
               ),
-              Expanded(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        state.instKmPerKwh > 90.0
-                            ? "MAX"
-                            : state.instKmPerKwh
-                                  .toStringAsFixed(1)
-                                  .padLeft(5, '0'),
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                          color: instEffColor,
-                          fontSize: 62,
-                          fontWeight: FontWeight.bold,
-                          height: 1.0,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        "km/kWh",
-                        style: TextStyle(
-                          color: p.dimText,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
-        Container(width: 1, color: p.border),
-        // RIGHT HALF: SESS, LAP, DIST
         Expanded(
-          flex: 3,
-          child: Column(
-            children: [
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: p.border, width: 1),
-                    ),
-                  ),
-                  child: _buildMiniRow(
-                    "SESS",
-                    state.sessionTimeString,
-                    valColor: p.amber,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(color: p.border, width: 1),
-                    ),
-                  ),
-                  child: _buildMiniRow(
-                    "LAP",
-                    state.lapNumber.toString(),
-                    valColor: p.pink,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  state.instKmPerKwh > 90.0
+                      ? "MAX"
+                      : state.instKmPerKwh
+                            .toStringAsFixed(1)
+                            .padLeft(5, '0'),
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    color: instEffColor,
+                    fontSize: 42,
+                    fontWeight: FontWeight.bold,
+                    height: 1.0,
                   ),
                 ),
-              ),
-              Expanded(
-                child: _buildMiniRow(
-                  "DIST",
-                  "${state.distanceKm.toStringAsFixed(2)} km",
-                  valColor: p.teal,
+                const SizedBox(height: 2),
+                Text(
+                  "km/kWh",
+                  style: TextStyle(
+                    color: p.dimText,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
     );
   }
+}
 
-  Widget _buildMiniRow(
-    String label,
-    String val, {
-    Color valColor = Colors.white,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: p.dimText,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
+// -----------------------------------------------------------------------------
+// STRAT MARKER (flashing BURN / COAST / HOLD)
+// -----------------------------------------------------------------------------
+class _FlashingStratMarker extends StatefulWidget {
+  final DashboardState state;
+  final Palette p;
+
+  const _FlashingStratMarker({required this.state, required this.p});
+
+  @override
+  State<_FlashingStratMarker> createState() => _FlashingStratMarkerState();
+}
+
+class _FlashingStratMarkerState extends State<_FlashingStratMarker>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    )..repeat(reverse: true);
+    _opacity = Tween<double>(begin: 0.25, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String _stratLabel(String strategy) {
+    switch (strategy.toUpperCase()) {
+      case 'ATTACK':
+        return 'BURN';
+      case 'REGEN':
+        return 'HOLD';
+      case 'COAST':
+      case 'PACE':
+        return 'COAST';
+      default:
+        return strategy.toUpperCase();
+    }
+  }
+
+  Color _stratColor(String strategy) {
+    switch (strategy.toUpperCase()) {
+      case 'ATTACK':
+        return widget.p.orange;
+      case 'REGEN':
+        return widget.p.red;
+      case 'COAST':
+      case 'PACE':
+        return widget.p.cyan;
+      default:
+        return widget.p.mainText;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.p;
+    final state = widget.state;
+    final hasFault =
+        state.lastErrorCode != 'OK' && state.lastErrorCode != 'NONE';
+    final label = hasFault
+        ? 'ERR ${state.lastErrorCode}'
+        : _stratLabel(state.strategy);
+    final color = hasFault ? p.red : _stratColor(state.strategy);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: hasFault
+            ? Colors.red.shade900.withValues(alpha: 0.5)
+            : color.withValues(alpha: p.light ? 0.2 : 0.12),
+        border: Border(
+          left: BorderSide(color: p.border, width: 1),
+          bottom: BorderSide(color: p.border, width: 1),
+        ),
+      ),
+      child: FadeTransition(
+        opacity: _opacity,
+        child: Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      color: color,
+                      fontSize: 40,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2.0,
+                      height: 1.0,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'STRAT',
+                    style: TextStyle(
+                      color: p.dimText,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 2.5,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          Text(
-            val,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontFeatures: const [FontFeature.tabularFigures()],
-              color: valColor,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

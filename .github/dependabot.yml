@@ -1,0 +1,16 @@
+# Keep dependencies up to date. PRs are opened automatically; the CI
+# workflow runs analyze + tests on every PR so regressions are caught
+# before merge.
+version: 2
+updates:
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5

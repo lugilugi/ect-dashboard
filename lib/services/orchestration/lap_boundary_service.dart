@@ -114,14 +114,16 @@ class LapBoundaryService {
 
   LapBoundaryConfig get config => _config;
 
-  void configure(LapBoundaryConfig config) {
-    _config = config;
-    resetTracking();
-  }
-
   void setFinishLine({required GeoPoint start, required GeoPoint end}) {
     _config = _config.copyWith(finishLineStart: start, finishLineEnd: end);
     resetTracking();
+  }
+
+  void setDeadzone(Duration deadzone) {
+    if (deadzone.inMilliseconds == _config.deadzone.inMilliseconds) {
+      return;
+    }
+    _config = _config.copyWith(deadzone: deadzone);
   }
 
   void resetTracking() {

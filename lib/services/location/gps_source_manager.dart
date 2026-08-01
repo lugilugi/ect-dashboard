@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:telemetry_dashboard/models/telemetry/phone_gps_sample.dart';
@@ -46,6 +47,7 @@ class GpsSourceManager {
     _state.markExternalGpsHeartbeat();
   }
 
+  @visibleForTesting
   void ingestPhoneSample(Position position) {
     ingestPhoneSampleData(
       PhoneGpsSample(
@@ -67,6 +69,7 @@ class GpsSourceManager {
     _state.updatePhoneGpsFallback(
       locked: sample.locked,
       accuracyM: sample.accuracyM,
+      satellites: sample.satelliteCount,
     );
 
     if (!sample.locked) {

@@ -67,6 +67,34 @@ class _FakeMqttTransport implements MqttTransport {
   }
 }
 
+class _FailingSpool extends LocalSpoolService {
+  _FailingSpool() : super(forceInMemory: true);
+
+  bool failNextEnqueue = false;
+
+  @override
+  Future<int> enqueueBatch({
+    required String topic,
+    required String payloadJson,
+    DateTime? enqueuedAtUtc,
+    String? sessionId,
+    int? seqInSessionStart,
+    int? seqInSessionEnd,
+  }) async {
+    if (failNextEnqueue) {
+      throw StateError('spool unavailable');
+    }
+    return super.enqueueBatch(
+      topic: topic,
+      payloadJson: payloadJson,
+      enqueuedAtUtc: enqueuedAtUtc,
+      sessionId: sessionId,
+      seqInSessionStart: seqInSessionStart,
+      seqInSessionEnd: seqInSessionEnd,
+    );
+  }
+}
+
 Future<void> _drainMicrotasks([int ticks = 8]) async {
   for (int i = 0; i < ticks; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -77,11 +105,28 @@ List<int> _extractSequenceOrder(List<_PublishedMessage> publishedMessages) {
   return publishedMessages
       .map((message) {
         final payload = jsonDecode(message.payloadJson) as Map<String, dynamic>;
-        final events = payload['events'] as List<dynamic>;
-        final event = events.first as Map<String, dynamic>;
-        return (event['seq_in_session'] as num).toInt();
+        return (payload['seq_in_session_start'] as num).toInt();
       })
       .toList(growable: false);
+}
+
+bool _assertSparseContract(_PublishedMessage message, {int? lapNumber}) {
+  final payload = jsonDecode(message.payloadJson) as Map<String, dynamic>;
+  final hasRequired =
+      payload.containsKey('session_uid') &&
+      payload.containsKey('lap_number') &&
+      payload.containsKey('ts_wall_utc') &&
+      payload.containsKey('ts_session_ms') &&
+      payload.containsKey('seq_in_session_start') &&
+      payload.containsKey('seq_in_session_end');
+  if (!hasRequired) {
+    return false;
+  }
+  if (lapNumber != null && (payload['lap_number'] as num).toInt() != lapNumber) {
+    return false;
+  }
+  final hasEventsArray = payload.containsKey('events') && payload['events'] is List;
+  return !hasEventsArray;
 }
 
 void main() {
@@ -121,6 +166,9 @@ void main() {
         expect(service.pendingPublishCountForTest, 0);
         expect(await spool.pendingCount(), 0);
         expect(transport.publishedMessages.length, 3);
+        for (final message in transport.publishedMessages) {
+          expect(_assertSparseContract(message), isTrue);
+        }
         expect(
           _extractSequenceOrder(transport.publishedMessages),
           equals(<int>[1, 2, 3]),
@@ -179,9 +227,113 @@ void main() {
         expect(await spool.pendingCount(), 0);
         expect(await spool.pendingDecodedEventCount(), 0);
         expect(replayTransport.publishedMessages.length, 4);
+        for (final message in replayTransport.publishedMessages) {
+          expect(_assertSparseContract(message), isTrue);
+        }
         expect(
           _extractSequenceOrder(replayTransport.publishedMessages),
           equals(<int>[1, 2, 3, 4]),
+        );
+
+        state.dispose();
+        await spool.close();
+      },
+    );
+  });
+
+  group('MqttService session metadata handoff', () {
+    List<_PublishedMessage> sessionsMessages(_FakeMqttTransport transport) {
+      return transport.publishedMessages
+          .where((m) => m.topic == 'telemetry/eco_archers/sessions')
+          .toList(growable: false);
+    }
+
+    test(
+      'metadata published while offline is queued and delivered on reconnect',
+      () async {
+        final state = DashboardState();
+        final spool = LocalSpoolService(forceInMemory: true);
+        final transport = _FakeMqttTransport();
+        final service = MqttService(
+          state,
+          localSpoolService: spool,
+          transport: transport,
+        );
+
+        state.startSession('Offline Metadata');
+        service.publishSessionMetadata();
+        await _drainMicrotasks();
+
+        // Offline: nothing sent yet, but the batch is durably queued.
+        expect(transport.publishedMessages, isEmpty);
+        expect(await spool.pendingCount(), 1);
+
+        transport.simulateReconnect();
+        await _drainMicrotasks();
+
+        final sessionsMsgs = sessionsMessages(transport);
+        expect(sessionsMsgs, hasLength(1));
+        final payload =
+            jsonDecode(sessionsMsgs.first.payloadJson)
+                as Map<String, dynamic>;
+        expect(payload['uid'], state.sessionId);
+        expect(payload['session_name'], 'Offline Metadata');
+
+        state.dispose();
+        await spool.close();
+      },
+    );
+
+    test(
+      'metadata is re-published on reconnect when the first handoff failed',
+      () async {
+        final state = DashboardState();
+        final spool = _FailingSpool();
+        final transport = _FakeMqttTransport();
+        final service = MqttService(
+          state,
+          localSpoolService: spool,
+          transport: transport,
+        );
+
+        state.startSession('Retry Metadata');
+        state.lapsCompleted = 2;
+
+        // First attempt: offline AND the spool is unavailable -> not handed
+        // off. The dedup cache must stay stale.
+        spool.failNextEnqueue = true;
+        service.publishSessionMetadata();
+        await _drainMicrotasks();
+        expect(transport.publishedMessages, isEmpty);
+
+        // Reconnect: the stale cache triggers a direct re-publish.
+        transport.simulateReconnect();
+        await _drainMicrotasks();
+
+        final sessionsMsgs = sessionsMessages(transport);
+        expect(sessionsMsgs, hasLength(1));
+        final payload =
+            jsonDecode(sessionsMsgs.first.payloadJson)
+                as Map<String, dynamic>;
+        expect(payload['uid'], state.sessionId);
+        expect(payload['session_name'], 'Retry Metadata');
+
+        // Subsequent identical metadata is deduped.
+        service.publishSessionMetadata();
+        await _drainMicrotasks();
+        expect(sessionsMessages(transport), hasLength(1));
+
+        // A real change publishes again.
+        state.lapsCompleted = 3;
+        service.publishSessionMetadata();
+        await _drainMicrotasks();
+        final afterChange = sessionsMessages(transport);
+        expect(afterChange, hasLength(2));
+        final updated =
+            jsonDecode(afterChange.last.payloadJson) as Map<String, dynamic>;
+        expect(
+          (updated['vehicle_setup'] as String),
+          contains('"laps_completed":3'),
         );
 
         state.dispose();

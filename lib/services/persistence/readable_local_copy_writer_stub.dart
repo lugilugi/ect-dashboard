@@ -60,5 +60,7 @@ class ReadableLocalCopyWriter {
 
   Future<void> pruneOlderThan(Duration maxAge) async {}
 
+  Future<void> clearAllFiles() async {}
+
   Future<void> close() async {}
 }

@@ -5,14 +5,14 @@ datasources:
     uid: timescaledb
     type: postgres
     access: proxy
-    url: timescaledb:5432
-    user: postgres
+    url: ${TS_DATASOURCE_URL:-timescaledb:5432}
+    user: ${TS_DATASOURCE_USER:-postgres}
     jsonData:
-      database: telemetry
+      database: ${TS_DATASOURCE_DB:-telemetry}
       sslmode: disable
       postgresVersion: 1500
       timescaledb: true
     secureJsonData:
-      password: postgres
+      password: ${TS_DATASOURCE_PASSWORD:-postgres}
     editable: true
     isDefault: true

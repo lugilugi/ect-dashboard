@@ -45,6 +45,7 @@ class AndroidFusedLocationService {
 
     final speedMps = _asDouble(event['speedMps']) ?? 0.0;
     final headingDeg = _asDouble(event['headingDeg']) ?? 0.0;
+    final satelliteCount = _asInt(event['satellites']) ?? -1;
     final timestampMs =
         _asInt(event['timestampMs']) ??
         DateTime.now().toUtc().millisecondsSinceEpoch;
@@ -59,6 +60,7 @@ class AndroidFusedLocationService {
         timestampMs,
         isUtc: true,
       ),
+      satelliteCount: satelliteCount,
     );
   }
 

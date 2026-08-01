@@ -163,7 +163,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT lap_number, started_at, ended_at, duration_ms, crossing_valid, deadzone_ms, detection_method, detection_confidence FROM laps WHERE session_uid::text = '${session_id}' ORDER BY lap_number;",
+          "rawSql": "SELECT lap_number, started_at, ended_at, EXTRACT(EPOCH FROM (COALESCE(ended_at, started_at) - started_at)) * 1000 AS duration_ms FROM laps WHERE session_uid::text = '${session_id}' ORDER BY lap_number;",
           "refId": "A"
         }
       ],
@@ -201,11 +201,11 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT time, recovered_seq_in_session, checkpoint_seq_in_session, spool_max_seq_in_session, replay_backlog_count, recovery_resume_count FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY time DESC LIMIT 100;",
+          "rawSql": "SELECT time, value::double precision AS recovery_resumed FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'Recovery_Resumed' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY time DESC LIMIT 100;",
           "refId": "A"
         }
       ],
-      "title": "Recovery Events",
+      "title": "Recovery Resumed Events",
       "type": "table"
     },
     {
@@ -239,11 +239,11 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT time, command_key, status, retries, reason, command_sequence FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY time DESC LIMIT 200;",
+          "rawSql": "SELECT time, signal_name AS metric, value::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('Voltage_780', 'Voltage_740') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY time DESC LIMIT 200;",
           "refId": "A"
         }
       ],
-      "title": "Command TX Audit",
+      "title": "Battery Voltage Trend",
       "type": "table"
     },
     {
@@ -284,11 +284,11 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", signal_name AS metric, max(value)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('USB_Connected', 'MQTT_Connected') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", signal_name AS metric, max(value)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('GPS_Locked', 'GPS_Fallback_Active') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
           "refId": "A"
         }
       ],
-      "title": "Connectivity State History",
+      "title": "GPS Lock / Fallback State",
       "type": "timeseries"
     },
     {
@@ -329,11 +329,11 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", max(value)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'MQTT_Backlog_Count' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", max(value)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'GPS_Satellites' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],
-      "title": "MQTT Backlog Trend",
+      "title": "GPS Satellite Count",
       "type": "timeseries"
     },
     {
@@ -374,11 +374,11 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", source AS metric, COUNT(*)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND source IN ('external_gps', 'phone_gps') AND signal_name IN ('GPS_Locked', 'GPS_Speed_Kmh', 'GPS_Latitude_Deg') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", signal_name AS metric, avg(value)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('GPS_Speed_Kmh', 'GPS_Accuracy_M') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
           "refId": "A"
         }
       ],
-      "title": "GPS Source Presence",
+      "title": "GPS Speed / Accuracy",
       "type": "timeseries"
     },
     {
@@ -419,11 +419,11 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", status AS metric, COUNT(*)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", avg(value)::double precision AS value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('Voltage_780', 'Voltage_740') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],
-      "title": "Command Outcomes Over Time",
+      "title": "Average Battery Voltage",
       "type": "timeseries"
     }
   ],

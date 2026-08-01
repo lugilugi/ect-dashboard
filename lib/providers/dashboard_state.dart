@@ -14,8 +14,6 @@ import 'package:telemetry_dashboard/services/persistence/readable_local_copy_wri
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 
-enum MqttStatus { disconnected, connecting, connected }
-
 class _SessionTicker {
   final SessionControlStore _sessionControl;
   final VoidCallback _onTick;
@@ -55,13 +53,19 @@ class AlertStateStore {
   int alertCooldownMs = 1500;
   int alertCriticalRepeatCount = 2;
   int alertCriticalRepeatIntervalMs = 550;
-  int alertEmitCount = 0;
   String lastAlertCode = 'NONE';
   String lastAlertReasonClass = 'NONE';
   DriverAlertSeverity? lastAlertSeverity;
   DateTime? lastAlertAtUtc;
-  final Queue<String> recentAlertEvents = Queue<String>();
   Future<void> Function()? onRequestAlertTestTone;
+  final Map<AlertVariableKey, AlertVariableSettings> alertVariables = {
+    for (final spec in alertVariableSpecs)
+      spec.key: AlertVariableSettings(
+        enabled: spec.defaultEnabled,
+        minThreshold: spec.defaultMin,
+        maxThreshold: spec.defaultMax,
+      ),
+  };
 }
 
 class ReadableCopyStateStore {
@@ -81,7 +85,6 @@ class ReadableCopyStateStore {
 }
 
 class ConfigStateStore {
-  String apiUrl = "https://your-backend-api.local/api/telemetry";
   List<double> throttleMap = [0.0, 25.0, 50.0, 75.0, 100.0];
   List<double> throttleMapDraft = [0.0, 25.0, 50.0, 75.0, 100.0];
   String selectedThrottleMapProfile = 'Default';
@@ -92,9 +95,6 @@ class ConfigStateStore {
   bool useDictionaryAuxDispatch = true;
   double speedUpperThreshold = 40.0;
   double speedLowerThreshold = 25.0;
-  String graphMetric = "speed";
-  double graphYMin = 0.0;
-  double graphYMax = 50.0;
 }
 
 class TelemetryMetricsStore {
@@ -105,7 +105,6 @@ class TelemetryMetricsStore {
   // Aux states
   bool leftTurn = false;
   bool rightTurn = false;
-  bool brakeLight = false;
   bool headlights = false;
   bool hazards = false;
   bool horn = false;
@@ -114,13 +113,11 @@ class TelemetryMetricsStore {
   // Power & Environment
   double mainVoltage = 0.0;
   double current780 = 0.0;
-  double current740 = 0.0;
   double mcTempC = 45.0;
   double battTempC = 35.0;
 
   // Energy
   double energyJ780 = 0.0;
-  double energyJ740 = 0.0;
 
   // EV Metrics
   double speedKmh = 0.0;
@@ -142,8 +139,6 @@ class TelemetryMetricsStore {
   int errorCount = 0;
   String lastErrorCode = "OK";
   String strategy = "PACE";
-
-  final Queue<double> graphHistory = Queue<double>();
 }
 
 class GpsStateStore {
@@ -158,8 +153,6 @@ class GpsStateStore {
   String? currentGpsSource;
   bool notificationPermissionGranted = true;
   bool backgroundLocationPermissionGranted = true;
-  int gpsSourceTransitions = 0;
-  DateTime? lastGpsSourceChangedAtUtc;
   double? phoneGpsAccuracyM;
   DateTime lastExternalGpsMessageAt = DateTime.now();
   double? lastKnownLat;
@@ -167,9 +160,6 @@ class GpsStateStore {
 }
 
 class DashboardState extends ChangeNotifier {
-  MqttStatus _mqttStatus = MqttStatus.disconnected;
-  MqttStatus get mqttStatus => _mqttStatus;
-
   String _sessionName = "";
   String _sessionId = "";
   final SessionControlStore _sessionControl = SessionControlStore();
@@ -180,20 +170,6 @@ class DashboardState extends ChangeNotifier {
   final ConfigStateStore _config = ConfigStateStore();
   final TelemetryMetricsStore _metrics = TelemetryMetricsStore();
   final GpsStateStore _gps = GpsStateStore();
-
-  bool _isMqttTransmitting = false;
-  bool get isMqttTransmitting => _isMqttTransmitting;
-  Timer? _mqttTxTimer;
-
-  void notifyMqttTxSuccess() {
-    _isMqttTransmitting = true;
-    notifyListeners();
-    _mqttTxTimer?.cancel();
-    _mqttTxTimer = Timer(const Duration(milliseconds: 300), () {
-      _isMqttTransmitting = false;
-      notifyListeners();
-    });
-  }
 
   SpoolHealthStore get spoolHealth => _spoolHealth;
   SessionControlStore get sessionControl => _sessionControl;
@@ -253,12 +229,9 @@ class DashboardState extends ChangeNotifier {
       LapBoundaryService.defaultConfig();
 
 
-  bool startGateReady = false;
-  int startGateRemainingMs = 0;
   String? startBlockReason;
   String? endBlockReason;
   String? lastCrossingReason;
-  double? lastCrossingConfidence;
 
   LapDividerMode lapDividerMode = LapDividerMode.geofence;
   double distanceLapDividerKm = 0.25;
@@ -272,9 +245,7 @@ class DashboardState extends ChangeNotifier {
   SessionState get sessionState => _sessionState;
   LapPhase get lapPhase => _lapPhase;
 
-  String get uiModeWire => _uiMode.wireValue;
   String get sessionStateWire => _sessionState.wireValue;
-  String get lapPhaseWire => _lapPhase.wireValue;
   String get lapProgressText => '$lapNumber';
 
   bool get deadzoneActive => crossingDeadzoneRemainingMs > 0;
@@ -294,8 +265,6 @@ class DashboardState extends ChangeNotifier {
         return 'CROSS?';
       case LapPhase.crossingDeadzone:
         return 'DEADZONE';
-      case LapPhase.restartAllowed:
-        return 'READY';
       case LapPhase.lapComplete:
         return 'LAP OK';
       case LapPhase.sessionComplete:
@@ -332,6 +301,7 @@ class DashboardState extends ChangeNotifier {
     return 'EXT';
   }
 
+  @visibleForTesting
   String get oldestUnsentAgeText {
     if (unsentBatchCount <= 0) {
       return '0.0s';
@@ -431,20 +401,12 @@ class DashboardState extends ChangeNotifier {
     startBlockReason = null;
     endBlockReason = null;
     _applySessionControlState(snapshot.controlState);
-
-    final gateStatus = _sessionOrchestrator.evaluateStartGate(
-      speedKmh: speedKmh,
-      nowUtc: DateTime.now().toUtc(),
+    _lapBoundaryService.resetTracking();
+    _lapBoundaryService.setDeadzone(
+      Duration(milliseconds: crossingDeadzoneMs),
     );
-    _updateStartGateFromDecision(gateStatus);
-    notifyListeners();
-  }
 
-  double get commandAckRate {
-    if (commandCompletionCount == 0) {
-      return 0;
-    }
-    return commandAckCount / commandCompletionCount;
+    notifyListeners();
   }
 
   String get lastAlertSeverityText {
@@ -455,30 +417,12 @@ class DashboardState extends ChangeNotifier {
     return '${(alertVolume * 100).round()}%';
   }
 
-  String get readableCopyRetentionDaysText {
-    return '$readableCopyRetentionDays d';
-  }
-
-  String get readableCopyMaxFileSizeText {
-    final mb = readableCopyMaxFileBytes / (1024 * 1024);
-    return '${mb.toStringAsFixed(1)} MB';
-  }
-
-  String get readableCopyPreviewStatusText {
-    if (readableCopyPreviewLoading) {
-      return 'LOADING';
-    }
-    if (readableCopyPreviewError != null &&
-        readableCopyPreviewError!.isNotEmpty) {
-      return 'ERROR';
-    }
-    return 'READY';
-  }
-
+  @visibleForTesting
   int get commandTerminalCount {
     return commandCompletionCount + commandRejectedCount;
   }
 
+  @visibleForTesting
   int get pendingTxCommandCount {
     return max(0, commandSentCount - commandTerminalCount);
   }
@@ -489,11 +433,6 @@ class DashboardState extends ChangeNotifier {
   void updateMqttHost(String newHost) {
     if (_mqttHost == newHost) return;
     _mqttHost = newHost;
-    notifyListeners();
-  }
-
-  void setMqttStatus(MqttStatus status) {
-    _mqttStatus = status;
     notifyListeners();
   }
 
@@ -518,9 +457,7 @@ class DashboardState extends ChangeNotifier {
       control: sessionControlState,
       speedKmh: speedKmh,
       nowUtc: DateTime.now().toUtc(),
-      isSimulated: isSimulated,
     );
-    _updateStartGateFromDecision(decision.startGateStatus);
 
     if (!decision.accepted) {
       startBlockReason = decision.reason;
@@ -567,14 +504,6 @@ class DashboardState extends ChangeNotifier {
     return true;
   }
 
-  void armSession() {
-    final armedControl = _sessionOrchestrator.arm(
-      control: sessionControlState,
-    );
-    _applySessionControlState(armedControl);
-    notifyListeners();
-  }
-
   void setUiMode(UiMode mode) {
     if (_uiMode == mode) {
       return;
@@ -583,14 +512,7 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setLapPhase(LapPhase phase) {
-    if (_lapPhase == phase) {
-      return;
-    }
-    _lapPhase = phase;
-    notifyListeners();
-  }
-
+  @visibleForTesting
   void setLapsCompleted(int value) {
     final bounded = value.clamp(0, 9999);
     if (lapsCompleted == bounded) {
@@ -600,17 +522,15 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setLapsPlanned(int value) {
-    // No-op: lapsPlanned has been removed. Kept for backward compatibility
-    // with preferences that may call this on restore.
-  }
-
   void setCrossingDeadzoneMs(int value) {
     final bounded = value.clamp(1000, 10000);
     if (crossingDeadzoneMs == bounded) {
       return;
     }
     crossingDeadzoneMs = bounded;
+    _lapBoundaryService.setDeadzone(
+      Duration(milliseconds: crossingDeadzoneMs),
+    );
     if (crossingDeadzoneRemainingMs > crossingDeadzoneMs) {
       crossingDeadzoneRemainingMs = crossingDeadzoneMs;
     }
@@ -629,6 +549,8 @@ class DashboardState extends ChangeNotifier {
           _lapPhase == LapPhase.crossingCandidate) {
         _lapPhase = LapPhase.running;
       }
+    } else {
+      _lapBoundaryService.resetTracking();
     }
     notifyListeners();
   }
@@ -656,11 +578,6 @@ class DashboardState extends ChangeNotifier {
     _sessionControl.applyControlState(control);
   }
 
-  void _updateStartGateFromDecision(StartGateStatus status) {
-    startGateReady = status.ready;
-    startGateRemainingMs = status.holdRemainingMs;
-  }
-
   void _handleSpoolHealthChanged() {
     notifyListeners();
   }
@@ -673,7 +590,6 @@ class DashboardState extends ChangeNotifier {
     startBlockReason = null;
     endBlockReason = null;
     lastCrossingReason = null;
-    lastCrossingConfidence = null;
     _nextDistanceDividerKm = null;
     _lapBoundaryService.resetTracking();
     notifyListeners();
@@ -681,6 +597,9 @@ class DashboardState extends ChangeNotifier {
 
   void configureLapBoundary({required GeoPoint start, required GeoPoint end}) {
     _lapBoundaryService.setFinishLine(start: start, end: end);
+    _lapBoundaryService.setDeadzone(
+      Duration(milliseconds: crossingDeadzoneMs),
+    );
     notifyListeners();
   }
 
@@ -708,7 +627,7 @@ class DashboardState extends ChangeNotifier {
       _gps.lastKnownLon = lon;
     }
 
-    if (lapDividerMode != LapDividerMode.geofence) {
+    if (lapDividerMode != LapDividerMode.geofence || !isLogging) {
       return;
     }
 
@@ -740,7 +659,6 @@ class DashboardState extends ChangeNotifier {
         _lapPhase = LapPhase.crossingCandidate;
         crossingValid = false;
         lastCrossingReason = crossingEvent?.reason;
-        lastCrossingConfidence = crossingEvent?.confidence;
         notifyListeners();
         return;
       case LapCrossingDecision.accepted:
@@ -754,7 +672,6 @@ class DashboardState extends ChangeNotifier {
         );
         _applySessionControlState(nextControl);
         lastCrossingReason = null;
-        lastCrossingConfidence = crossingEvent.confidence;
         lapNumber = max(1, lapsCompleted + 1);
         notifyListeners();
         return;
@@ -762,28 +679,38 @@ class DashboardState extends ChangeNotifier {
   }
 
   // Pedal states
-  double throttlePercent = 0.0;
-  bool isBrakePressed = false;
+  double get throttlePercent => _metrics.throttlePercent;
+  set throttlePercent(double value) => _metrics.throttlePercent = value;
+  bool get isBrakePressed => _metrics.isBrakePressed;
+  set isBrakePressed(bool value) => _metrics.isBrakePressed = value;
 
   // Aux states
-  bool leftTurn = false;
-  bool rightTurn = false;
-  bool brakeLight = false;
-  bool headlights = false;
-  bool hazards = false;
-  bool horn = false;
-  bool wipers = false;
+  bool get leftTurn => _metrics.leftTurn;
+  set leftTurn(bool value) => _metrics.leftTurn = value;
+  bool get rightTurn => _metrics.rightTurn;
+  set rightTurn(bool value) => _metrics.rightTurn = value;
+  bool get headlights => _metrics.headlights;
+  set headlights(bool value) => _metrics.headlights = value;
+  bool get hazards => _metrics.hazards;
+  set hazards(bool value) => _metrics.hazards = value;
+  bool get horn => _metrics.horn;
+  set horn(bool value) => _metrics.horn = value;
+  bool get wipers => _metrics.wipers;
+  set wipers(bool value) => _metrics.wipers = value;
 
   // Power & Environment
-  double mainVoltage = 0.0;
-  double current780 = 0.0;
-  double current740 = 0.0;
-  double mcTempC = 45.0;
-  double battTempC = 35.0;
+  double get mainVoltage => _metrics.mainVoltage;
+  set mainVoltage(double value) => _metrics.mainVoltage = value;
+  double get current780 => _metrics.current780;
+  set current780(double value) => _metrics.current780 = value;
+  double get mcTempC => _metrics.mcTempC;
+  set mcTempC(double value) => _metrics.mcTempC = value;
+  double get battTempC => _metrics.battTempC;
+  set battTempC(double value) => _metrics.battTempC = value;
 
   // Energy
-  double energyJ780 = 0.0;
-  double energyJ740 = 0.0;
+  double get energyJ780 => _metrics.energyJ780;
+  set energyJ780(double value) => _metrics.energyJ780 = value;
 
   // Connections
   bool isConnected = false;
@@ -793,7 +720,9 @@ class DashboardState extends ChangeNotifier {
   int get spoolPendingBatchCount => _spoolHealth.pendingBatchCount;
   int get spoolPendingBatchCapacity => _spoolHealth.pendingBatchCapacity;
   bool get spoolCapacityWarning => _spoolHealth.capacityWarning;
+  @visibleForTesting
   int get recoveryResumeCount => _spoolHealth.recoveryResumeCount;
+  @visibleForTesting
   DateTime? get lastRecoveryAtUtc => _spoolHealth.lastRecoveryAtUtc;
   bool enableSimulation = false;
   bool isSimulated = false;
@@ -824,24 +753,99 @@ class DashboardState extends ChangeNotifier {
   int commandSentCount = 0;
   int commandCompletionCount = 0;
   int commandAckCount = 0;
-  int commandNackCount = 0;
-  int commandTimeoutCount = 0;
   int commandRejectedCount = 0;
-  final Queue<String> recentCommandEvents = Queue<String>();
 
-  bool alertAudioEnabled = true;
-  bool alertHapticsEnabled = true;
-  bool alertAdvisoryEnabled = true;
-  double alertVolume = 0.75;
-  int alertCooldownMs = 1500;
-  int alertCriticalRepeatCount = 2;
-  int alertCriticalRepeatIntervalMs = 550;
-  int alertEmitCount = 0;
-  String lastAlertCode = 'NONE';
-  String lastAlertReasonClass = 'NONE';
-  DriverAlertSeverity? lastAlertSeverity;
-  DateTime? lastAlertAtUtc;
-  final Queue<String> recentAlertEvents = Queue<String>();
+  bool get alertAudioEnabled => _alerts.alertAudioEnabled;
+  set alertAudioEnabled(bool value) => _alerts.alertAudioEnabled = value;
+  bool get alertHapticsEnabled => _alerts.alertHapticsEnabled;
+  set alertHapticsEnabled(bool value) => _alerts.alertHapticsEnabled = value;
+  bool get alertAdvisoryEnabled => _alerts.alertAdvisoryEnabled;
+  set alertAdvisoryEnabled(bool value) => _alerts.alertAdvisoryEnabled = value;
+  double get alertVolume => _alerts.alertVolume;
+  set alertVolume(double value) => _alerts.alertVolume = value;
+  int get alertCooldownMs => _alerts.alertCooldownMs;
+  set alertCooldownMs(int value) => _alerts.alertCooldownMs = value;
+  int get alertCriticalRepeatCount => _alerts.alertCriticalRepeatCount;
+  set alertCriticalRepeatCount(int value) =>
+      _alerts.alertCriticalRepeatCount = value;
+  int get alertCriticalRepeatIntervalMs => _alerts.alertCriticalRepeatIntervalMs;
+  set alertCriticalRepeatIntervalMs(int value) =>
+      _alerts.alertCriticalRepeatIntervalMs = value;
+  String get lastAlertCode => _alerts.lastAlertCode;
+  set lastAlertCode(String value) => _alerts.lastAlertCode = value;
+  String get lastAlertReasonClass => _alerts.lastAlertReasonClass;
+  set lastAlertReasonClass(String value) =>
+      _alerts.lastAlertReasonClass = value;
+  DriverAlertSeverity? get lastAlertSeverity => _alerts.lastAlertSeverity;
+  set lastAlertSeverity(DriverAlertSeverity? value) =>
+      _alerts.lastAlertSeverity = value;
+  DateTime? get lastAlertAtUtc => _alerts.lastAlertAtUtc;
+  set lastAlertAtUtc(DateTime? value) => _alerts.lastAlertAtUtc = value;
+
+  Map<AlertVariableKey, AlertVariableSettings> get alertVariables =>
+      _alerts.alertVariables;
+
+  void setAlertVariableEnabled(AlertVariableKey key, bool enabled) {
+    final settings = _alerts.alertVariables[key];
+    if (settings == null || settings.enabled == enabled) {
+      return;
+    }
+    settings.enabled = enabled;
+    notifyListeners();
+  }
+
+  void setAlertVariableMinThreshold(AlertVariableKey key, double value) {
+    final settings = _alerts.alertVariables[key];
+    if (settings == null || settings.minThreshold == value) {
+      return;
+    }
+    settings.minThreshold = value;
+    notifyListeners();
+  }
+
+  void setAlertVariableMaxThreshold(AlertVariableKey key, double value) {
+    final settings = _alerts.alertVariables[key];
+    if (settings == null || settings.maxThreshold == value) {
+      return;
+    }
+    settings.maxThreshold = value;
+    notifyListeners();
+  }
+
+  void applyAlertVariableSettings(
+    AlertVariableKey key,
+    AlertVariableSettings settings,
+  ) {
+    final current = _alerts.alertVariables[key];
+    if (current == null) {
+      return;
+    }
+    current.enabled = settings.enabled;
+    current.minThreshold = settings.minThreshold;
+    current.maxThreshold = settings.maxThreshold;
+    notifyListeners();
+  }
+
+  double alertVariableValue(AlertVariableKey key) {
+    switch (key) {
+      case AlertVariableKey.voltage:
+        return mainVoltage;
+      case AlertVariableKey.current:
+        return current780;
+      case AlertVariableKey.power:
+        return mainVoltage * current780;
+      case AlertVariableKey.speed:
+        return speedKmh;
+      case AlertVariableKey.mcTemp:
+        return mcTempC;
+      case AlertVariableKey.battTemp:
+        return battTempC;
+      case AlertVariableKey.bmsMinCell:
+        return bmsCells.isEmpty ? 0.0 : bmsCells.reduce(min);
+      case AlertVariableKey.bus12V:
+        return bus12V;
+    }
+  }
 
   int get readableCopyRetentionDays => _readableCopy.retentionDays;
   set readableCopyRetentionDays(int value) =>
@@ -927,11 +931,6 @@ class DashboardState extends ChangeNotifier {
       _gps.backgroundLocationPermissionGranted;
   set backgroundLocationPermissionGranted(bool value) =>
       _gps.backgroundLocationPermissionGranted = value;
-  int get gpsSourceTransitions => _gps.gpsSourceTransitions;
-  set gpsSourceTransitions(int value) => _gps.gpsSourceTransitions = value;
-  DateTime? get lastGpsSourceChangedAtUtc => _gps.lastGpsSourceChangedAtUtc;
-  set lastGpsSourceChangedAtUtc(DateTime? value) =>
-      _gps.lastGpsSourceChangedAtUtc = value;
   double? get phoneGpsAccuracyM => _gps.phoneGpsAccuracyM;
   set phoneGpsAccuracyM(double? value) => _gps.phoneGpsAccuracyM = value;
   double? get lastKnownLat => _gps.lastKnownLat;
@@ -949,9 +948,6 @@ class DashboardState extends ChangeNotifier {
   DateTime get _lastExternalGpsMessageAt => _gps.lastExternalGpsMessageAt;
   set _lastExternalGpsMessageAt(DateTime value) =>
       _gps.lastExternalGpsMessageAt = value;
-
-  Duration get externalGpsTimeout =>
-      Duration(milliseconds: gpsFallbackPeriodMs);
 
   bool get isExternalGpsStale {
     return DateTime.now().difference(_lastExternalGpsMessageAt) >
@@ -985,8 +981,6 @@ class DashboardState extends ChangeNotifier {
   }
 
   // Configuration
-  String get apiUrl => _config.apiUrl;
-  set apiUrl(String value) => _config.apiUrl = value;
   List<double> get throttleMap => _config.throttleMap;
   set throttleMap(List<double> value) => _config.throttleMap = value;
   List<double> get throttleMapDraft => _config.throttleMapDraft;
@@ -1029,23 +1023,10 @@ class DashboardState extends ChangeNotifier {
   double get speedLowerThreshold => _config.speedLowerThreshold;
   set speedLowerThreshold(double value) => _config.speedLowerThreshold = value;
 
-  // Configurable graph
-  String get graphMetric => _config.graphMetric;
-  set graphMetric(String value) => _config.graphMetric = value;
-  double get graphYMin => _config.graphYMin;
-  double get graphYMax => _config.graphYMax;
-
-  void updateGraphYRange(double min, double max) {
-    if (_config.graphYMin == min && _config.graphYMax == max) return;
-    _config.graphYMin = min;
-    _config.graphYMax = max;
-    notifyListeners();
-  }
-
-  Queue<double> get graphHistory => _metrics.graphHistory;
-  static const int maxGraphPoints = 100;
-
   void Function(String)? onUsbTx;
+
+  Future<void> Function()? onRequestMqttSpoolReset;
+  Future<void> Function()? onRequestLocalStorageClear;
 
   void sendUsbCommand(String cmd) {
     onUsbTx?.call(cmd);
@@ -1079,24 +1060,13 @@ class DashboardState extends ChangeNotifier {
         break;
       case TxCommandStatus.nacked:
         commandCompletionCount += 1;
-        commandNackCount += 1;
         break;
       case TxCommandStatus.timeout:
         commandCompletionCount += 1;
-        commandTimeoutCount += 1;
         break;
       case TxCommandStatus.rejected:
         commandRejectedCount += 1;
         break;
-    }
-
-    final seqText = result.sequence?.toString() ?? '-';
-    final reason = result.reason == null ? '' : ' (${result.reason})';
-    final line =
-        '${DateTime.now().toIso8601String()} ${result.command.commandKey} ${result.status.name.toUpperCase()} seq=$seqText retry=${result.retries}$reason';
-    recentCommandEvents.addLast(line);
-    while (recentCommandEvents.length > 25) {
-      recentCommandEvents.removeFirst();
     }
 
     notifyListeners();
@@ -1118,12 +1088,6 @@ class DashboardState extends ChangeNotifier {
       onTick: notifyListeners,
     );
     _sessionTicker.start();
-
-    final gateStatus = _sessionOrchestrator.evaluateStartGate(
-      speedKmh: speedKmh,
-      nowUtc: DateTime.now().toUtc(),
-    );
-    _updateStartGateFromDecision(gateStatus);
   }
 
   @override
@@ -1163,6 +1127,42 @@ class DashboardState extends ChangeNotifier {
       isSimulated = state;
       notifyListeners();
     }
+  }
+
+  void resetTelemetry() {
+    throttlePercent = 0;
+    isBrakePressed = false;
+    mainVoltage = 0;
+    current780 = 0;
+    mcTempC = 45.0;
+    battTempC = 35.0;
+    energyJ780 = 0;
+    speedKmh = 0;
+    distanceKm = 0;
+    instKmPerKwh = 0;
+    avgKmPerKwh = 0;
+    errorCount = 0;
+    lastErrorCode = 'OK';
+    strategy = 'PACE';
+    bmsCells = List.filled(24, 3.80);
+    bus12V = 12.4;
+    _speedHistory.clear();
+    _powerKwHistory.clear();
+    gpsSatellites = 0;
+    gpsLocked = false;
+    usingPhoneGpsFallback = false;
+    phoneGpsAccuracyM = null;
+    if (!isLogging) {
+      sessionTimeSeconds = 0;
+      lapNumber = 0;
+    }
+    notifyListeners();
+  }
+
+  void clearCurrentState() {
+    resetTelemetry();
+    resetSessionState();
+    lastCanPayloads.clear();
   }
 
   void toggleSimulation(bool val) {
@@ -1286,6 +1286,7 @@ class DashboardState extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
   Future<void> exportReadableCopySnapshot() async {
     final callback = onRequestReadableCopyExport;
     if (callback == null) {
@@ -1350,21 +1351,10 @@ class DashboardState extends ChangeNotifier {
     String? reasonClass,
     DateTime? atUtc,
   }) {
-    alertEmitCount += 1;
-    lastAlertCode = alertCode;
-    lastAlertSeverity = severity;
-    lastAlertReasonClass = reasonClass ?? 'NONE';
-    lastAlertAtUtc = (atUtc ?? DateTime.now().toUtc()).toUtc();
-
-    final reasonText = lastAlertReasonClass == 'NONE'
-        ? ''
-        : ' [$lastAlertReasonClass]';
-    final line =
-        '${lastAlertAtUtc!.toIso8601String()} ${severity.wireValue} $alertCode$reasonText';
-    recentAlertEvents.addLast(line);
-    while (recentAlertEvents.length > 25) {
-      recentAlertEvents.removeFirst();
-    }
+    _alerts.lastAlertCode = alertCode;
+    _alerts.lastAlertSeverity = severity;
+    _alerts.lastAlertReasonClass = reasonClass ?? 'NONE';
+    _alerts.lastAlertAtUtc = (atUtc ?? DateTime.now().toUtc()).toUtc();
 
     notifyListeners();
   }
@@ -1375,12 +1365,6 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updateGraphMetric(String metric) {
-    graphMetric = metric;
-    graphHistory.clear();
-    notifyListeners();
-  }
-
   void setServerConnectionState(bool state) {
     if (isServerConnected != state) {
       isServerConnected = state;
@@ -1388,6 +1372,7 @@ class DashboardState extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
   void updateMqttBacklog({
     required int count,
     required DateTime? oldestEnqueuedAtUtc,
@@ -1398,6 +1383,7 @@ class DashboardState extends ChangeNotifier {
     );
   }
 
+  @visibleForTesting
   void updateSpoolHealth({
     required int pendingBatchCount,
     required int pendingBatchCapacity,
@@ -1408,13 +1394,9 @@ class DashboardState extends ChangeNotifier {
     );
   }
 
+  @visibleForTesting
   void recordRecoveryResume({DateTime? atUtc}) {
     _spoolHealth.recordRecoveryResume(atUtc: atUtc);
-  }
-
-  void updateApiUrl(String url) {
-    apiUrl = url;
-    notifyListeners();
   }
 
   void updateThrottleMap(int index, double value) {
@@ -1500,12 +1482,6 @@ class DashboardState extends ChangeNotifier {
     return true;
   }
 
-  void updateThermals(double mc, double batt) {
-    mcTempC = mc;
-    battTempC = batt;
-    notifyListeners();
-  }
-
   void updateDashStatus(DashStatusPayload payload) {
     errorCount = payload.errorCount;
     lastErrorCode = payload.lastErrorCode;
@@ -1515,6 +1491,7 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
   void updateErrorCode(String code) {
     lastErrorCode = code;
     notifyListeners();
@@ -1529,10 +1506,6 @@ class DashboardState extends ChangeNotifier {
     required bool locked,
   }) {
     _lastExternalGpsMessageAt = DateTime.now();
-    if (usingPhoneGpsFallback) {
-      gpsSourceTransitions += 1;
-      lastGpsSourceChangedAtUtc = DateTime.now().toUtc();
-    }
     gpsSatellites = satellites;
     gpsLocked = locked;
     usingPhoneGpsFallback = false;
@@ -1563,7 +1536,11 @@ class DashboardState extends ChangeNotifier {
     }
   }
 
-  void updatePhoneGpsFallback({required bool locked, double? accuracyM}) {
+  void updatePhoneGpsFallback({
+    required bool locked,
+    double? accuracyM,
+    int? satellites,
+  }) {
     if (!isExternalGpsStale) {
       return;
     }
@@ -1579,30 +1556,16 @@ class DashboardState extends ChangeNotifier {
     final changed =
         gpsLocked != locked || !usingPhoneGpsFallback || hasAccuracyChanged;
 
-    if (!usingPhoneGpsFallback) {
-      gpsSourceTransitions += 1;
-      lastGpsSourceChangedAtUtc = DateTime.now().toUtc();
-    }
-
     gpsLocked = locked;
-    gpsSatellites = -1;
+    if (satellites != null) {
+      gpsSatellites = satellites;
+    }
     usingPhoneGpsFallback = true;
     phoneGpsAccuracyM = boundedAccuracy;
 
     if (changed) {
       notifyListeners();
     }
-  }
-
-  void updateEngineerMock(List<double> cells, double bus, int sats, bool lock) {
-    bmsCells = cells;
-    bus12V = bus;
-    _lastExternalGpsMessageAt = DateTime.now();
-    gpsSatellites = sats;
-    gpsLocked = lock;
-    usingPhoneGpsFallback = false;
-    phoneGpsAccuracyM = null;
-    notifyListeners();
   }
 
   void updatePedal(PedalPayload payload) {
@@ -1614,7 +1577,6 @@ class DashboardState extends ChangeNotifier {
   void updateAux(AuxControlPayload payload) {
     leftTurn = payload.leftTurn;
     rightTurn = payload.rightTurn;
-    brakeLight = payload.brakeLight;
     headlights = payload.headlights;
     hazards = payload.hazards;
     horn = payload.horn;
@@ -1626,8 +1588,6 @@ class DashboardState extends ChangeNotifier {
     mainVoltage = payload.voltage;
     if (id == CanMsgID.pwrMonitor780) {
       current780 = payload.current780;
-    } else if (id == CanMsgID.pwrMonitor740) {
-      current740 = payload.current740;
     }
     _updateEfficiency();
     notifyListeners();
@@ -1635,15 +1595,16 @@ class DashboardState extends ChangeNotifier {
 
   void updateEnergy(EnergyPayload payload) {
     energyJ780 = payload.joules780;
-    energyJ740 = payload.joules740;
     notifyListeners();
   }
 
+  @visibleForTesting
   void updateErrorCount(int count) {
     errorCount = count;
     notifyListeners();
   }
 
+  @visibleForTesting
   void updateStrategy(String str) {
     strategy = str;
     notifyListeners();
@@ -1658,11 +1619,6 @@ class DashboardState extends ChangeNotifier {
       _applyDistanceLapDivider(distanceKm);
     }
 
-    final gateStatus = _sessionOrchestrator.evaluateStartGate(
-      speedKmh: speed,
-      nowUtc: DateTime.now().toUtc(),
-    );
-    _updateStartGateFromDecision(gateStatus);
     _updateEfficiency();
     notifyListeners();
   }
@@ -1687,13 +1643,13 @@ class DashboardState extends ChangeNotifier {
 
     var cursor = nextDivider;
     while (cumulativeDistanceKm >= cursor) {
-      _applyDividerLapAccepted(reason: 'distance_divider');
+      _applyDividerLapAccepted();
       cursor += dividerKm;
     }
     _nextDistanceDividerKm = cursor;
   }
 
-  void _applyDividerLapAccepted({required String reason}) {
+  void _applyDividerLapAccepted() {
     final nextLapsCompleted = lapsCompleted + 1;
     final nextControl = sessionControlState.copyWith(
       lapsCompleted: nextLapsCompleted,
@@ -1703,8 +1659,7 @@ class DashboardState extends ChangeNotifier {
     );
     _applySessionControlState(nextControl);
     lapNumber = max(1, lapsCompleted + 1);
-    lastCrossingReason = reason;
-    lastCrossingConfidence = 1.0;
+    lastCrossingReason = null;
   }
 
   void _updateEfficiency() {
@@ -1733,23 +1688,6 @@ class DashboardState extends ChangeNotifier {
     double totalEnergyKwh = energyJ780 / 3600000.0;
     if (totalEnergyKwh > 0.001 && distanceKm > 0.001) {
       avgKmPerKwh = distanceKm / totalEnergyKwh;
-    }
-
-    // Update rolling graph history
-    double graphVal;
-    switch (graphMetric) {
-      case "power":
-        graphVal = powerKw * 1000; // W
-        break;
-      case "efficiency":
-        graphVal = instKmPerKwh;
-        break;
-      default:
-        graphVal = speedKmh;
-    }
-    graphHistory.addLast(graphVal);
-    while (graphHistory.length > maxGraphPoints) {
-      graphHistory.removeFirst();
     }
   }
 }

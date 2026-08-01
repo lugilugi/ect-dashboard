@@ -7,7 +7,6 @@ enum LapPhase {
   running,
   crossingCandidate,
   crossingDeadzone,
-  restartAllowed,
   lapComplete,
   sessionComplete,
 }
@@ -77,8 +76,6 @@ extension LapPhaseWire on LapPhase {
         return 'CROSSING_CANDIDATE';
       case LapPhase.crossingDeadzone:
         return 'CROSSING_DEADZONE';
-      case LapPhase.restartAllowed:
-        return 'RESTART_ALLOWED';
       case LapPhase.lapComplete:
         return 'LAP_COMPLETE';
       case LapPhase.sessionComplete:
@@ -96,8 +93,6 @@ extension LapPhaseWire on LapPhase {
         return LapPhase.crossingCandidate;
       case 'CROSSING_DEADZONE':
         return LapPhase.crossingDeadzone;
-      case 'RESTART_ALLOWED':
-        return LapPhase.restartAllowed;
       case 'LAP_COMPLETE':
         return LapPhase.lapComplete;
       case 'SESSION_COMPLETE':

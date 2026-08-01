@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 
@@ -26,6 +29,7 @@ class AppPreferencesService {
       'prefs.alert_critical_repeat_count';
   static const String _kAlertCriticalRepeatIntervalMs =
       'prefs.alert_critical_repeat_interval_ms';
+  static const String _kAlertVariables = 'prefs.alert_variables';
   static const String _kLastKnownLat = 'prefs.last_known_lat';
   static const String _kLastKnownLon = 'prefs.last_known_lon';
 
@@ -47,6 +51,7 @@ class AppPreferencesService {
       state.alertCooldownMs,
       state.alertCriticalRepeatCount,
       state.alertCriticalRepeatIntervalMs,
+      jsonEncode(_alertVariablesToJson(state)),
     ].join('|');
   }
 
@@ -136,6 +141,27 @@ class AppPreferencesService {
       state.setAlertCriticalRepeatIntervalMs(alertCriticalRepeatIntervalMs);
     }
 
+    final alertVariablesRaw = prefs.getString(_kAlertVariables);
+    if (alertVariablesRaw != null) {
+      try {
+        final decoded = jsonDecode(alertVariablesRaw);
+        if (decoded is Map<String, dynamic>) {
+          decoded.forEach((keyWire, rawSettings) {
+            if (rawSettings is! Map<String, dynamic>) {
+              return;
+            }
+            final key = alertVariableKeyFromWire(keyWire);
+            final settings = AlertVariableSettings.fromJson(rawSettings);
+            if (key != null && settings != null) {
+              state.applyAlertVariableSettings(key, settings);
+            }
+          });
+        }
+      } catch (_) {
+        // Ignore malformed persisted alert variable settings.
+      }
+    }
+
     final lastLat = prefs.getDouble(_kLastKnownLat);
     final lastLon = prefs.getDouble(_kLastKnownLon);
     if (lastLat != null && lastLon != null) {
@@ -178,11 +204,19 @@ class AppPreferencesService {
       _kAlertCriticalRepeatIntervalMs,
       state.alertCriticalRepeatIntervalMs,
     );
+    await prefs.setString(_kAlertVariables, jsonEncode(_alertVariablesToJson(state)));
     if (state.lastKnownLat != null) {
       await prefs.setDouble(_kLastKnownLat, state.lastKnownLat!);
     }
     if (state.lastKnownLon != null) {
       await prefs.setDouble(_kLastKnownLon, state.lastKnownLon!);
     }
+  }
+
+  Map<String, Object?> _alertVariablesToJson(DashboardState state) {
+    return <String, Object?>{
+      for (final entry in state.alertVariables.entries)
+        entry.key.wireValue: entry.value.toJson(),
+    };
   }
 }

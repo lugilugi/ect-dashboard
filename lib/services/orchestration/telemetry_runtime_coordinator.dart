@@ -77,6 +77,8 @@ class TelemetryRuntimeCoordinator {
     state.onReadableCopyRetentionDaysChanged = null;
     state.onReadableCopyMaxFileBytesChanged = null;
     state.onSimulationToggleChanged = null;
+    state.onRequestMqttSpoolReset = null;
+    state.onRequestLocalStorageClear = null;
     _driverAlertService?.stop();
     if (_foregroundServiceRunning) {
       unawaited(_foregroundTelemetryService.stop());
@@ -163,6 +165,8 @@ class TelemetryRuntimeCoordinator {
     );
     state.onUsbTx = _usbService.sendString;
     state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
+    state.onRequestMqttSpoolReset = () => _mqttService.resetSpool();
+    state.onRequestLocalStorageClear = () => _localSpoolService.clearAllLocalStorage();
 
     state.addListener(_handleStateChanged);
     state.addListener(_handleStatePreferenceSync);

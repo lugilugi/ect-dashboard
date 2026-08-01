@@ -104,17 +104,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }) async {
     final messenger = ScaffoldMessenger.of(context);
 
-    if (state.isLogging && state.uiMode == UiMode.driver) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Aux commands are locked in Driver mode while logging.',
-          ),
-        ),
-      );
-      return;
-    }
-
     if (!state.useDictionaryAuxDispatch) {
       state.sendUsbCommand(legacyRawCommand);
       return;
@@ -177,7 +166,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           SnackBar(
             content: Text(
               state.endBlockReason ??
-                  'Stop blocked until lap target is reached or abort is used.',
+                  'Stop blocked until the CAN interface is ready. Hold to force-stop instead.',
             ),
           ),
         );
@@ -213,27 +202,27 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               // RUN NAME INPUT
-                TextField(
-                  controller: nameController,
-                  autofocus: true,
-                  style: TextStyle(
-                    color: p.cyan,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.bold,
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                style: TextStyle(
+                  color: p.cyan,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                ),
+                decoration: InputDecoration(
+                  labelText: "RUN NAME",
+                  labelStyle: const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 10,
+                    letterSpacing: 1.2,
                   ),
-                  decoration: InputDecoration(
-                    labelText: "RUN NAME",
-                    labelStyle: const TextStyle(
-                      color: Colors.white38,
-                      fontSize: 10,
-                      letterSpacing: 1.2,
-                    ),
-                    enabledBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: p.border),
-                    ),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: p.border),
                   ),
                 ),
-                const SizedBox(height: 20),
+              ),
+              const SizedBox(height: 20),
 
                 // MQTT DESTINATION INPUT (The Safeguard)
                 Container(
@@ -459,12 +448,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             : p.red;
         final gpsStatusLabel = state.gpsLocked ? 'FIX' : 'NO FIX';
 
+        final isServerOffline = !state.isServerConnected;
+
         return Container(
           height: topBarHeight,
           margin: const EdgeInsets.only(bottom: 4),
           decoration: BoxDecoration(
-            color: p.bg,
-            border: Border.all(color: p.border, width: 1),
+            color: isServerOffline
+                ? p.orange.withValues(alpha: 0.14)
+                : p.bg,
+            border: Border.all(
+              color: isServerOffline ? p.orange : p.border,
+              width: isServerOffline ? 1.5 : 1,
+            ),
           ),
           child: Row(
             children: [
@@ -684,21 +680,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          if (!isCompact && !isVeryTight) ...[
-                            Text(
-                              state.systemTimeString,
-                              style: TextStyle(
-                                color: p.amber,
-                                fontFamily: 'monospace',
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                                fontSize: (14.0 * widthScale).clamp(10.0, 14.0),
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                          ],
                           SizedBox(width: isCompact ? 6 : 10),
                           Icon(sourceIcon, color: sourceColor, size: 10),
                           const SizedBox(width: 4),
@@ -711,12 +692,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          Icon(
-                            Icons.sensors,
-                            color: state.isServerConnected ? p.cyan : p.red,
-                            size: 10,
-                          ),
-                          const SizedBox(width: 4),
                           Text(
                             onlineLabel,
                             style: TextStyle(
@@ -725,24 +700,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 150),
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: state.isMqttTransmitting ? p.green : Colors.transparent,
-                              boxShadow: state.isMqttTransmitting ? [
-                                BoxShadow(
-                                  color: p.green.withValues(alpha: 0.5),
-                                  blurRadius: 4,
-                                  spreadRadius: 1,
-                                )
-                              ] : null,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 8),
                           Text(
                             'Q:${state.unsentBatchCount}',
                             style: TextStyle(
@@ -759,23 +717,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                               ],
                             ),
                           ),
-                          if (state.unsentBatchCount > 0) ...[
-                            const SizedBox(width: 6),
-                            Text(
-                              isTight
-                                  ? 'A:${state.oldestUnsentAgeText}'
-                                  : 'AGE:${state.oldestUnsentAgeText}',
-                              style: TextStyle(
-                                color: p.orange,
-                                fontSize: detailFontSize,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                              ),
-                            ),
-                          ],
                           if (state.spoolCapacityWarning && !isTight) ...[
                             const SizedBox(width: 6),
                             Text(
@@ -790,18 +731,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                 ],
                               ),
                             ),
-                          ],
-                          const SizedBox(width: 10),
-                          if (!isTight) ...[
-                            Text(
-                              'LOCAL',
-                              style: TextStyle(
-                                color: p.dimText,
-                                fontSize: statusFontSize,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
                           ],
                           _buildModeNavButton(
                             label: 'DRV',
@@ -898,6 +827,33 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                       letterSpacing: 1.1,
                                     ),
                                   ),
+                                  if (state.isLogging &&
+                                      state.unsentBatchCount > 0) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 1,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: p.orange.withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: p.orange,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        '${state.unsentBatchCount}',
+                                        style: TextStyle(
+                                          color: p.orange,
+                                          fontSize: isTight ? 10 : 11,
+                                          fontWeight: FontWeight.w900,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -930,6 +886,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       child: Container(
         width: width,
         height: double.infinity,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: active ? color : Colors.transparent,
           border: Border(right: BorderSide(color: p.border, width: 1)),

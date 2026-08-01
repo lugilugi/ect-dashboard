@@ -22,23 +22,6 @@ class TelemetryEventBatchPayload {
     required this.events,
   });
 
-  factory TelemetryEventBatchPayload.singleEvent({
-    required String batchId,
-    required SessionControlState sessionControlState,
-    required String sessionId,
-    required DecodedMetricEvent event,
-  }) {
-    return TelemetryEventBatchPayload(
-      schemaVersion: telemetryEventSchemaVersion,
-      batchId: batchId,
-      sessionId: sessionId,
-      sessionState: sessionControlState.sessionState,
-      createdAtUtc: DateTime.now().toUtc(),
-      lapsCompleted: sessionControlState.lapsCompleted,
-      events: [event],
-    );
-  }
-
   Map<String, dynamic> toJson() {
     return {
       'schema_version': schemaVersion,

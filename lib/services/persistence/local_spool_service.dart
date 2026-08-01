@@ -134,26 +134,6 @@ class SpoolDecodedEventRecord {
   }
 }
 
-class SpoolRawFrameRecord {
-  final int id;
-  final String sessionId;
-  final DateTime tsWallUtc;
-  final int tsSessionMs;
-  final int canId;
-  final String payloadHex;
-  final String source;
-
-  const SpoolRawFrameRecord({
-    required this.id,
-    required this.sessionId,
-    required this.tsWallUtc,
-    required this.tsSessionMs,
-    required this.canId,
-    required this.payloadHex,
-    required this.source,
-  });
-}
-
 class SpoolHealthStore extends ChangeNotifier {
   int _pendingPublishCount = 0;
   DateTime? _oldestEnqueuedAtUtc;
@@ -292,12 +272,17 @@ class SpoolHealthStore extends ChangeNotifier {
   }
 }
 
+/// Persists telemetry locally.
+///
+/// - SQLite spool: holds MQTT payloads that have not reached the server yet
+///   (replayed on reconnect) plus crash-recovery session checkpoints and a
+///   deduplicated event log that keeps per-session sequence watermarks.
+/// - CSV output: every decoded telemetry event is appended to one CSV file per
+///   session, ready to open in any spreadsheet app.
 class LocalSpoolService {
   static const String _dbName = 'edge_spool.db';
   static const String _batchesTable = 'publish_batches';
-  static const String _attemptsTable = 'publish_attempts';
   static const String _decodedEventsTable = 'decoded_events';
-  static const String _rawFramesTable = 'raw_frames';
   static const String _checkpointsTable = 'session_checkpoints';
 
   final int maxPendingBatches;
@@ -316,11 +301,9 @@ class LocalSpoolService {
   bool _usingMemoryFallback = false;
   int _nextMemoryId = 1;
   int _nextMemoryDecodedEventId = 1;
-  int _nextMemoryRawFrameId = 1;
   final List<SpoolBatchRecord> _memoryRecords = <SpoolBatchRecord>[];
   final List<SpoolDecodedEventRecord> _memoryDecodedEvents =
       <SpoolDecodedEventRecord>[];
-  final List<SpoolRawFrameRecord> _memoryRawFrames = <SpoolRawFrameRecord>[];
   String? _memorySessionCheckpointJson;
 
   LocalSpoolService({
@@ -334,7 +317,6 @@ class LocalSpoolService {
            readableCopyWriter ??
            ReadableLocalCopyWriter(maxFileBytes: readableCopyMaxFileBytes);
 
-  bool get isUsingMemoryFallback => _usingMemoryFallback;
   String? get readableCopyPath => _readableCopyWriter.directoryPath;
   String? get sessionCsvPath => _readableCopyWriter.sessionCsvDirectoryPath;
 
@@ -356,7 +338,7 @@ class LocalSpoolService {
 
         _db = await openDatabase(
           fullPath,
-          version: 2,
+          version: 3,
           onCreate: (db, version) async {
             await db.execute('''
             CREATE TABLE $_batchesTable (
@@ -373,16 +355,6 @@ class LocalSpoolService {
             )
           ''');
             await db.execute('''
-            CREATE TABLE $_attemptsTable (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              batch_id INTEGER NOT NULL,
-              attempted_at_utc TEXT NOT NULL,
-              outcome TEXT NOT NULL,
-              error_reason TEXT,
-              FOREIGN KEY(batch_id) REFERENCES $_batchesTable(id)
-            )
-          ''');
-            await db.execute('''
             CREATE TABLE $_decodedEventsTable (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               session_id TEXT NOT NULL,
@@ -391,17 +363,6 @@ class LocalSpoolService {
               enqueued_at_utc TEXT NOT NULL,
               published_at_utc TEXT,
               UNIQUE(session_id, seq_in_session)
-            )
-          ''');
-            await db.execute('''
-            CREATE TABLE $_rawFramesTable (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              session_id TEXT NOT NULL,
-              ts_wall_utc TEXT NOT NULL,
-              ts_session_ms INTEGER NOT NULL,
-              can_id INTEGER NOT NULL,
-              payload_hex TEXT NOT NULL,
-              source TEXT NOT NULL
             )
           ''');
             await db.execute('''
@@ -415,16 +376,10 @@ class LocalSpoolService {
               'CREATE INDEX idx_batches_pending ON $_batchesTable(published_at_utc, enqueued_at_utc)',
             );
             await db.execute(
-              'CREATE INDEX idx_attempts_batch ON $_attemptsTable(batch_id, attempted_at_utc)',
-            );
-            await db.execute(
               'CREATE INDEX idx_decoded_pending ON $_decodedEventsTable(published_at_utc, enqueued_at_utc)',
             );
             await db.execute(
               'CREATE INDEX idx_decoded_session_seq ON $_decodedEventsTable(session_id, seq_in_session)',
-            );
-            await db.execute(
-              'CREATE INDEX idx_raw_frames_time ON $_rawFramesTable(ts_wall_utc)',
             );
           },
           onUpgrade: (db, oldVersion, newVersion) async {
@@ -436,6 +391,11 @@ class LocalSpoolService {
                 updated_at_utc TEXT NOT NULL
               )
             ''');
+            }
+            if (oldVersion < 3) {
+              // Version 3 dropped the unused audit/sink tables.
+              await db.execute('DROP TABLE IF EXISTS publish_attempts');
+              await db.execute('DROP TABLE IF EXISTS raw_frames');
             }
           },
         );
@@ -509,20 +469,6 @@ class LocalSpoolService {
       );
       _memoryRecords.add(record);
       await _trimMemoryPendingToCap();
-      await _appendReadableCopyRecord(
-        stream: 'publish_batches',
-        record: <String, Object?>{
-          'entry': 'enqueue_batch',
-          'spool_batch_id': record.id,
-          'topic': topic,
-          'session_id': sessionId,
-          'seq_in_session_start': seqInSessionStart,
-          'seq_in_session_end': seqInSessionEnd,
-          'payload_preview': _payloadPreview(payloadJson),
-          'enqueued_at_utc': enqueued.toIso8601String(),
-          'backend': 'memory',
-        },
-      );
       return record.id;
     }
 
@@ -535,20 +481,6 @@ class LocalSpoolService {
       'seq_in_session_end': seqInSessionEnd,
     });
     await _trimDbPendingToCap();
-    await _appendReadableCopyRecord(
-      stream: 'publish_batches',
-      record: <String, Object?>{
-        'entry': 'enqueue_batch',
-        'spool_batch_id': id,
-        'topic': topic,
-        'session_id': sessionId,
-        'seq_in_session_start': seqInSessionStart,
-        'seq_in_session_end': seqInSessionEnd,
-        'payload_preview': _payloadPreview(payloadJson),
-        'enqueued_at_utc': enqueued.toIso8601String(),
-        'backend': 'sqlite',
-      },
-    );
     return id;
   }
 
@@ -601,17 +533,6 @@ class LocalSpoolService {
           publishedAtUtc: null,
         ),
       );
-      await _appendReadableCopyRecord(
-        stream: 'decoded_events',
-        record: <String, Object?>{
-          'entry': 'enqueue_decoded_event',
-          'session_id': sessionId,
-          'seq_in_session': seqInSession,
-          'event_preview': _payloadPreview(eventJson),
-          'enqueued_at_utc': enqueued.toIso8601String(),
-          'backend': 'memory',
-        },
-      );
       await _appendSessionCsvEvent(
         sessionId: sessionId,
         seqInSession: seqInSession,
@@ -626,17 +547,6 @@ class LocalSpoolService {
       'event_json': eventJson,
       'enqueued_at_utc': enqueued.toIso8601String(),
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
-    await _appendReadableCopyRecord(
-      stream: 'decoded_events',
-      record: <String, Object?>{
-        'entry': 'enqueue_decoded_event',
-        'session_id': sessionId,
-        'seq_in_session': seqInSession,
-        'event_preview': _payloadPreview(eventJson),
-        'enqueued_at_utc': enqueued.toIso8601String(),
-        'backend': 'sqlite',
-      },
-    );
     await _appendSessionCsvEvent(
       sessionId: sessionId,
       seqInSession: seqInSession,
@@ -644,6 +554,7 @@ class LocalSpoolService {
     );
   }
 
+  @visibleForTesting
   Future<int> pendingDecodedEventCount() async {
     await initialize();
 
@@ -713,17 +624,6 @@ class LocalSpoolService {
 
         _memoryDecodedEvents[i] = record.copyWith(publishedAtUtc: published);
       }
-      await _appendReadableCopyRecord(
-        stream: 'decoded_events',
-        record: <String, Object?>{
-          'entry': 'mark_decoded_events_published_range',
-          'session_id': sessionId,
-          'seq_in_session_start': seqInSessionStart,
-          'seq_in_session_end': seqInSessionEnd,
-          'published_at_utc': published.toIso8601String(),
-          'backend': 'memory',
-        },
-      );
       return;
     }
 
@@ -736,92 +636,6 @@ class LocalSpoolService {
         seqInSessionEnd,
       ],
     );
-    await _appendReadableCopyRecord(
-      stream: 'decoded_events',
-      record: <String, Object?>{
-        'entry': 'mark_decoded_events_published_range',
-        'session_id': sessionId,
-        'seq_in_session_start': seqInSessionStart,
-        'seq_in_session_end': seqInSessionEnd,
-        'published_at_utc': published.toIso8601String(),
-        'backend': _usingMemoryFallback ? 'memory' : 'sqlite',
-      },
-    );
-  }
-
-  Future<void> enqueueRawFrame({
-    required String sessionId,
-    required int tsSessionMs,
-    required int canId,
-    required String payloadHex,
-    required String source,
-    DateTime? tsWallUtc,
-  }) async {
-    await initialize();
-    final tsWall = (tsWallUtc ?? DateTime.now().toUtc()).toUtc();
-
-    if (_usingMemoryFallback || _db == null) {
-      _memoryRawFrames.add(
-        SpoolRawFrameRecord(
-          id: _nextMemoryRawFrameId++,
-          sessionId: sessionId,
-          tsWallUtc: tsWall,
-          tsSessionMs: tsSessionMs,
-          canId: canId,
-          payloadHex: payloadHex,
-          source: source,
-        ),
-      );
-      await _appendReadableCopyRecord(
-        stream: 'raw_frames',
-        record: <String, Object?>{
-          'entry': 'enqueue_raw_frame',
-          'session_id': sessionId,
-          'ts_wall_utc': tsWall.toIso8601String(),
-          'ts_session_ms': tsSessionMs,
-          'can_id': canId,
-          'payload_hex': payloadHex,
-          'source': source,
-          'backend': 'memory',
-        },
-      );
-      return;
-    }
-
-    await _db!.insert(_rawFramesTable, <String, Object?>{
-      'session_id': sessionId,
-      'ts_wall_utc': tsWall.toIso8601String(),
-      'ts_session_ms': tsSessionMs,
-      'can_id': canId,
-      'payload_hex': payloadHex,
-      'source': source,
-    });
-    await _appendReadableCopyRecord(
-      stream: 'raw_frames',
-      record: <String, Object?>{
-        'entry': 'enqueue_raw_frame',
-        'session_id': sessionId,
-        'ts_wall_utc': tsWall.toIso8601String(),
-        'ts_session_ms': tsSessionMs,
-        'can_id': canId,
-        'payload_hex': payloadHex,
-        'source': source,
-        'backend': 'sqlite',
-      },
-    );
-  }
-
-  Future<int> rawFrameCount() async {
-    await initialize();
-
-    if (_usingMemoryFallback || _db == null) {
-      return _memoryRawFrames.length;
-    }
-
-    final rows = await _db!.rawQuery(
-      'SELECT COUNT(*) AS count FROM $_rawFramesTable',
-    );
-    return (rows.first['count'] as num?)?.toInt() ?? 0;
   }
 
   Future<void> recordAttempt({
@@ -845,18 +659,6 @@ class LocalSpoolService {
           lastAttemptAtUtc: attempted,
         );
       }
-      await _appendReadableCopyRecord(
-        stream: 'publish_attempts',
-        record: <String, Object?>{
-          'entry': 'record_attempt',
-          'spool_batch_id': batchId,
-          'outcome': outcome,
-          'error_reason': errorReason,
-          'attempted_at_utc': attempted.toIso8601String(),
-          'increment_attempt_counter': incrementAttemptCounter,
-          'backend': 'memory',
-        },
-      );
       return;
     }
 
@@ -871,25 +673,6 @@ class LocalSpoolService {
         <Object?>[attempted.toIso8601String(), batchId],
       );
     }
-
-    await _db!.insert(_attemptsTable, <String, Object?>{
-      'batch_id': batchId,
-      'attempted_at_utc': attempted.toIso8601String(),
-      'outcome': outcome,
-      'error_reason': errorReason,
-    });
-    await _appendReadableCopyRecord(
-      stream: 'publish_attempts',
-      record: <String, Object?>{
-        'entry': 'record_attempt',
-        'spool_batch_id': batchId,
-        'outcome': outcome,
-        'error_reason': errorReason,
-        'attempted_at_utc': attempted.toIso8601String(),
-        'increment_attempt_counter': incrementAttemptCounter,
-        'backend': 'sqlite',
-      },
-    );
   }
 
   Future<void> markPublished({
@@ -906,15 +689,6 @@ class LocalSpoolService {
           publishedAtUtc: published,
         );
       }
-      await _appendReadableCopyRecord(
-        stream: 'publish_batches',
-        record: <String, Object?>{
-          'entry': 'mark_batch_published',
-          'spool_batch_id': batchId,
-          'published_at_utc': published.toIso8601String(),
-          'backend': 'memory',
-        },
-      );
       return;
     }
 
@@ -923,15 +697,6 @@ class LocalSpoolService {
       <String, Object?>{'published_at_utc': published.toIso8601String()},
       where: 'id = ?',
       whereArgs: <Object?>[batchId],
-    );
-    await _appendReadableCopyRecord(
-      stream: 'publish_batches',
-      record: <String, Object?>{
-        'entry': 'mark_batch_published',
-        'spool_batch_id': batchId,
-        'published_at_utc': published.toIso8601String(),
-        'backend': 'sqlite',
-      },
     );
   }
 
@@ -948,6 +713,7 @@ class LocalSpoolService {
     return (rows.first['count'] as num?)?.toInt() ?? 0;
   }
 
+  @visibleForTesting
   Future<DateTime?> oldestPendingEnqueuedAtUtc() async {
     await initialize();
 
@@ -986,15 +752,6 @@ class LocalSpoolService {
 
     if (_usingMemoryFallback || _db == null) {
       _memorySessionCheckpointJson = checkpointJson;
-      await _appendReadableCopyRecord(
-        stream: 'session_checkpoints',
-        record: <String, Object?>{
-          'entry': 'save_session_checkpoint',
-          'checkpoint_preview': _payloadPreview(checkpointJson),
-          'updated_at_utc': updatedAt.toIso8601String(),
-          'backend': 'memory',
-        },
-      );
       return;
     }
 
@@ -1003,15 +760,6 @@ class LocalSpoolService {
       'checkpoint_json': checkpointJson,
       'updated_at_utc': updatedAt.toIso8601String(),
     }, conflictAlgorithm: ConflictAlgorithm.replace);
-    await _appendReadableCopyRecord(
-      stream: 'session_checkpoints',
-      record: <String, Object?>{
-        'entry': 'save_session_checkpoint',
-        'checkpoint_preview': _payloadPreview(checkpointJson),
-        'updated_at_utc': updatedAt.toIso8601String(),
-        'backend': 'sqlite',
-      },
-    );
   }
 
   Future<String?> readSessionCheckpointJson() async {
@@ -1038,24 +786,10 @@ class LocalSpoolService {
 
     if (_usingMemoryFallback || _db == null) {
       _memorySessionCheckpointJson = null;
-      await _appendReadableCopyRecord(
-        stream: 'session_checkpoints',
-        record: <String, Object?>{
-          'entry': 'clear_session_checkpoint',
-          'backend': 'memory',
-        },
-      );
       return;
     }
 
     await _db!.delete(_checkpointsTable, where: 'id = 1');
-    await _appendReadableCopyRecord(
-      stream: 'session_checkpoints',
-      record: <String, Object?>{
-        'entry': 'clear_session_checkpoint',
-        'backend': 'sqlite',
-      },
-    );
   }
 
   Future<void> prunePublishedOlderThan(Duration maxAge) async {
@@ -1075,10 +809,6 @@ class LocalSpoolService {
       _batchesTable,
       where: 'published_at_utc IS NOT NULL AND published_at_utc < ?',
       whereArgs: <Object?>[cutoff.toIso8601String()],
-    );
-    await _db!.delete(
-      _attemptsTable,
-      where: 'batch_id NOT IN (SELECT id FROM $_batchesTable)',
     );
   }
 
@@ -1102,30 +832,50 @@ class LocalSpoolService {
     );
   }
 
-  Future<void> pruneRawFramesOlderThan(Duration maxAge) async {
-    await initialize();
-    final cutoff = DateTime.now().toUtc().subtract(maxAge);
-
-    if (_usingMemoryFallback || _db == null) {
-      _memoryRawFrames.removeWhere(
-        (record) => record.tsWallUtc.isBefore(cutoff),
-      );
-      return;
-    }
-
-    await _db!.delete(
-      _rawFramesTable,
-      where: 'ts_wall_utc < ?',
-      whereArgs: <Object?>[cutoff.toIso8601String()],
-    );
-  }
-
   Future<void> pruneReadableCopyOlderThan(Duration maxAge) async {
     await initialize();
     if (!readableCopyEnabled) {
       return;
     }
     await _readableCopyWriter.pruneOlderThan(maxAge);
+  }
+
+  Future<void> clearSpoolBatches() async {
+    await initialize();
+
+    if (_usingMemoryFallback || _db == null) {
+      _memoryRecords.clear();
+      _nextMemoryId = 1;
+    } else {
+      await _db!.delete(_batchesTable);
+    }
+
+    spoolHealth.updateBacklog(count: 0, oldestEnqueuedAtUtc: null);
+    spoolHealth.updatePendingCapacity(
+      pendingBatchCount: 0,
+      pendingBatchCapacity: maxPendingBatches,
+    );
+  }
+
+  Future<void> clearDecodedEvents() async {
+    await initialize();
+
+    if (_usingMemoryFallback || _db == null) {
+      _memoryDecodedEvents.clear();
+      _nextMemoryDecodedEventId = 1;
+    } else {
+      await _db!.delete(_decodedEventsTable);
+    }
+  }
+
+  Future<void> clearAllLocalStorage() async {
+    await clearSpoolBatches();
+    await clearDecodedEvents();
+    await clearSessionCheckpoint();
+
+    if (readableCopyEnabled) {
+      await _readableCopyWriter.clearAllFiles();
+    }
   }
 
   Future<void> setReadableCopyMaxFileBytes(int maxFileBytes) async {
@@ -1245,20 +995,6 @@ class LocalSpoolService {
     }
   }
 
-  Future<void> _appendReadableCopyRecord({
-    required String stream,
-    required Map<String, Object?> record,
-  }) async {
-    if (!readableCopyEnabled) {
-      return;
-    }
-
-    // CSV-only storage mode intentionally disables JSONL mirror streams.
-    if (stream.isEmpty && record.isEmpty) {
-      return;
-    }
-  }
-
   Future<void> _appendSessionCsvEvent({
     required String sessionId,
     required int seqInSession,
@@ -1290,35 +1026,12 @@ class LocalSpoolService {
         'quality_flag': decoded['quality_flag'],
       };
 
-      final csvFilePath = await _readableCopyWriter.appendSessionCsvRow(
+      await _readableCopyWriter.appendSessionCsvRow(
         sessionId: sessionId,
         row: row,
-      );
-
-      if (csvFilePath == null || csvFilePath.isEmpty) {
-        return;
-      }
-
-      await _appendReadableCopyRecord(
-        stream: 'session_csv',
-        record: <String, Object?>{
-          'entry': 'append_session_csv',
-          'session_id': sessionId,
-          'seq_in_session': row['seq_in_session'],
-          'metric_key': row['metric_key'],
-          'csv_file': csvFilePath,
-          'backend': _usingMemoryFallback ? 'memory' : 'sqlite',
-        },
       );
     } catch (e) {
       debugPrint('Session CSV append failed: $e');
     }
-  }
-
-  String _payloadPreview(String payload, {int maxChars = 240}) {
-    if (payload.length <= maxChars) {
-      return payload;
-    }
-    return '${payload.substring(0, maxChars)}...';
   }
 }

@@ -80,21 +80,21 @@ class SessionOrchestrator {
     required SessionControlState control,
     required double speedKmh,
     required DateTime nowUtc,
-    bool isSimulated = false,
   }) {
     final gateStatus = evaluateStartGate(speedKmh: speedKmh, nowUtc: nowUtc);
 
     if (control.sessionState != SessionState.armed &&
-        control.sessionState != SessionState.idle) {
+        control.sessionState != SessionState.idle &&
+        control.sessionState != SessionState.ended) {
       return SessionTransitionDecision(
         accepted: false,
-        reason: 'Session can only start from IDLE or ARMED state.',
+        reason: 'Session can only start from IDLE, ARMED, or ENDED state.',
         nextControl: control,
         startGateStatus: gateStatus,
       );
     }
 
-    if (!gateStatus.ready && !isSimulated) {
+    if (!gateStatus.ready) {
       return SessionTransitionDecision(
         accepted: false,
         reason: 'Start blocked until standstill hold window is satisfied.',
@@ -177,18 +177,6 @@ class SessionControlStore {
 
   bool get isLogging => _sessionState == SessionState.logging;
 
-  SessionControlState toControlState() {
-    return SessionControlState(
-      sessionState: _sessionState,
-      uiMode: uiMode,
-      lapsCompleted: lapsCompleted,
-      lapPhase: lapPhase,
-      crossingDeadzoneMs: crossingDeadzoneMs,
-      crossingDeadzoneRemainingMs: crossingDeadzoneRemainingMs,
-      crossingValid: crossingValid,
-    );
-  }
-
   void applyControlState(SessionControlState control) {
     lapsCompleted = control.lapsCompleted;
     crossingDeadzoneMs = control.crossingDeadzoneMs;
@@ -197,10 +185,6 @@ class SessionControlStore {
     uiMode = control.uiMode;
     lapPhase = control.lapPhase;
     _sessionState = control.sessionState;
-  }
-
-  void setSessionState(SessionState next) {
-    _sessionState = next;
   }
 
   void reset() {
@@ -212,7 +196,9 @@ class SessionControlStore {
   }
 
   void advanceOneSecond() {
-    sessionTimeSeconds += 1;
+    if (_sessionState == SessionState.logging) {
+      sessionTimeSeconds += 1;
+    }
 
     if (crossingDeadzoneRemainingMs > 0) {
       crossingDeadzoneRemainingMs = (crossingDeadzoneRemainingMs - 1000)

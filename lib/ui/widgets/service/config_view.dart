@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
@@ -11,6 +10,7 @@ import 'package:telemetry_dashboard/providers/app_providers.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
+import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 enum ConfigSection {
   connectivity,
   canDictionary,
@@ -1692,6 +1692,28 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
               ],
             ),
           ),
+          const SizedBox(height: 12),
+          _buildSectionHeader(
+            title: 'Alert Variables',
+            subtitle:
+                'Per-variable CAN thresholds with toggle control. Alerts fire when the live value crosses a threshold while logging.',
+          ),
+          _settingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final spec in alertVariableSpecs) ...[
+                  _AlertVariableRow(state: state, p: p, spec: spec),
+                  if (spec != alertVariableSpecs.last)
+                    Container(
+                      height: 1,
+                      margin: const EdgeInsets.symmetric(vertical: 8),
+                      color: p.border,
+                    ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1753,18 +1775,6 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                 ),
                 const SizedBox(height: 10),
                 _buildStorageField(
-                  label: 'ACTIVE SESSION',
-                  value: activeSessionId,
-                  valueColor: p.cyan,
-                ),
-                const SizedBox(height: 8),
-                _buildStorageField(
-                  label: 'SESSION NAME',
-                  value: state.sessionName.isEmpty ? '--' : state.sessionName,
-                  monospace: false,
-                ),
-                const SizedBox(height: 8),
-                _buildStorageField(
                   label: 'CSV DIRECTORY',
                   value: csvDirectory ?? '--',
                 ),
@@ -1775,7 +1785,7 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Decoded telemetry appends to one CSV per session while LOGGING. Spool replay remains active for robust offline recovery.',
+                  'Every telemetry event is appended to one CSV per session while LOGGING. Each row is a single metric reading; open the file in any spreadsheet app. Unsent MQTT messages stay in the local spool and are replayed when the server reconnects.',
                   style: TextStyle(
                     color: p.dimText,
                     fontSize: 10,
@@ -1793,6 +1803,45 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                     ),
                   ),
                 ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildSectionHeader(
+            title: 'Maintenance',
+            subtitle:
+                'Destructive actions for the MQTT spool, local storage, and live state.',
+          ),
+          _settingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildCmdBtn('RESET MQTT SPOOL', () async {
+                  await state.onRequestMqttSpoolReset?.call();
+                  if (!mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('MQTT spool reset.')),
+                  );
+                }),
+                const SizedBox(height: 8),
+                _buildCmdBtn('CLEAR LOCAL STORAGE', () async {
+                  await state.onRequestLocalStorageClear?.call();
+                  if (!mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Local storage cleared.')),
+                  );
+                }),
+                const SizedBox(height: 8),
+                _buildCmdBtn('CLEAR CURRENT STATE', () {
+                  state.clearCurrentState();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Current state cleared.')),
+                  );
+                }),
               ],
             ),
           ),
@@ -1830,119 +1879,6 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                   'USE DICTIONARY TX FOR AUX COMMANDS',
                   state.useDictionaryAuxDispatch,
                   (val) => state.toggleDictionaryAuxDispatch(val),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'GRAPH METRIC',
-                  style: TextStyle(
-                    color: p.dimText,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 10,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                DropdownButton<String>(
-                  value: state.graphMetric,
-                  dropdownColor: p.light
-                      ? Colors.white
-                      : const Color(0xFF1E1E1E),
-                  style: TextStyle(
-                    color: p.cyan,
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  isExpanded: true,
-                  items: const [
-                    DropdownMenuItem(value: 'speed', child: Text('SPEED')),
-                    DropdownMenuItem(value: 'power', child: Text('POWER (W)')),
-                    DropdownMenuItem(
-                      value: 'efficiency',
-                      child: Text('EFFICIENCY'),
-                    ),
-                  ],
-                  onChanged: (val) {
-                    if (val != null) state.updateGraphMetric(val);
-                  },
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'GRAPH Y-AXIS RANGE',
-                  style: TextStyle(
-                    color: p.dimText,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 10,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        initialValue: state.graphYMin.toStringAsFixed(0),
-                        style: TextStyle(
-                          color: p.cyan,
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                        ),
-                        decoration: InputDecoration(
-                          labelText: 'MIN',
-                          labelStyle: TextStyle(color: p.dimText, fontSize: 10),
-                          filled: true,
-                          fillColor: p.light
-                              ? Colors.grey.shade200
-                              : Colors.black,
-                          contentPadding: const EdgeInsets.all(8),
-                          border: OutlineInputBorder(
-                            borderSide: BorderSide(color: p.border),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderSide: BorderSide(color: p.border),
-                          ),
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (val) {
-                          final v = double.tryParse(val);
-                          if (v != null) {
-                            state.updateGraphYRange(v, state.graphYMax);
-                          }
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextFormField(
-                        initialValue: state.graphYMax.toStringAsFixed(0),
-                        style: TextStyle(
-                          color: p.cyan,
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                        ),
-                        decoration: InputDecoration(
-                          labelText: 'MAX',
-                          labelStyle: TextStyle(color: p.dimText, fontSize: 10),
-                          filled: true,
-                          fillColor: p.light
-                              ? Colors.grey.shade200
-                              : Colors.black,
-                          contentPadding: const EdgeInsets.all(8),
-                          border: OutlineInputBorder(
-                            borderSide: BorderSide(color: p.border),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderSide: BorderSide(color: p.border),
-                          ),
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (val) {
-                          final v = double.tryParse(val);
-                          if (v != null) {
-                            state.updateGraphYRange(state.graphYMin, v);
-                          }
-                        },
-                      ),
-                    ),
-                  ],
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -2340,6 +2276,186 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _AlertVariableRow extends StatefulWidget {
+  final DashboardState state;
+  final Palette p;
+  final AlertVariableSpec spec;
+
+  const _AlertVariableRow({
+    required this.state,
+    required this.p,
+    required this.spec,
+  });
+
+  @override
+  State<_AlertVariableRow> createState() => _AlertVariableRowState();
+}
+
+class _AlertVariableRowState extends State<_AlertVariableRow> {
+  late final TextEditingController _minController;
+  late final TextEditingController _maxController;
+
+  AlertVariableSettings get _settings =>
+      widget.state.alertVariables[widget.spec.key]!;
+
+  @override
+  void initState() {
+    super.initState();
+    _minController = TextEditingController(
+      text: _settings.minThreshold.toStringAsFixed(widget.spec.fractionDigits),
+    );
+    _maxController = TextEditingController(
+      text: _settings.maxThreshold.toStringAsFixed(widget.spec.fractionDigits),
+    );
+  }
+
+  @override
+  void dispose() {
+    _minController.dispose();
+    _maxController.dispose();
+    super.dispose();
+  }
+
+  Color get _severityColor {
+    switch (widget.spec.severity) {
+      case DriverAlertSeverity.advisory:
+        return widget.p.cyan;
+      case DriverAlertSeverity.warning:
+        return widget.p.orange;
+      case DriverAlertSeverity.critical:
+        return widget.p.red;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.p;
+    final spec = widget.spec;
+    final settings = _settings;
+    final liveValue = widget.state.alertVariableValue(spec.key);
+    final isViolating = settings.enabled &&
+        (liveValue < settings.minThreshold ||
+            liveValue > settings.maxThreshold);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Transform.scale(
+          scale: 0.75,
+          child: Switch(
+            value: settings.enabled,
+            activeThumbColor: p.amber,
+            onChanged: (value) =>
+                widget.state.setAlertVariableEnabled(spec.key, value),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          flex: 2,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${spec.label}  (${spec.severity.shortLabel})',
+                style: TextStyle(
+                  color: settings.enabled ? _severityColor : p.dimText,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'NOW ${liveValue.toStringAsFixed(spec.fractionDigits)} ${spec.unit}',
+                style: TextStyle(
+                  color: isViolating ? p.red : p.cyan,
+                  fontFamily: 'monospace',
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 3,
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildThresholdField(
+                  controller: _minController,
+                  label: 'MIN',
+                  onChanged: (value) {
+                    final parsed = double.tryParse(value);
+                    if (parsed != null) {
+                      widget.state.setAlertVariableMinThreshold(
+                        spec.key,
+                        parsed,
+                      );
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _buildThresholdField(
+                  controller: _maxController,
+                  label: 'MAX',
+                  onChanged: (value) {
+                    final parsed = double.tryParse(value);
+                    if (parsed != null) {
+                      widget.state.setAlertVariableMaxThreshold(
+                        spec.key,
+                        parsed,
+                      );
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildThresholdField({
+    required TextEditingController controller,
+    required String label,
+    required ValueChanged<String> onChanged,
+  }) {
+    final p = widget.p;
+    return TextField(
+      controller: controller,
+      enabled: _settings.enabled,
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: true,
+        signed: true,
+      ),
+      style: TextStyle(
+        color: p.cyan,
+        fontFamily: 'monospace',
+        fontFeatures: const [FontFeature.tabularFigures()],
+        fontSize: 12,
+      ),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(color: p.dimText, fontSize: 9),
+        filled: true,
+        fillColor: p.light ? Colors.grey.shade200 : Colors.black,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        border: OutlineInputBorder(borderSide: BorderSide(color: p.border)),
+        enabledBorder: OutlineInputBorder(
+          borderSide: BorderSide(color: p.border),
+        ),
+      ),
+      onChanged: onChanged,
     );
   }
 }

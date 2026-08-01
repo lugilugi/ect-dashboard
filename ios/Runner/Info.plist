@@ -45,6 +45,8 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Used as a fallback GPS source when external vehicle GPS messages are unavailable.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Used as a fallback GPS source when external vehicle GPS messages are unavailable, including while the telemetry session continues in the background.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 </dict>
