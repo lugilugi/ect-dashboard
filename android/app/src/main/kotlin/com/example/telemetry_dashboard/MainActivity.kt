@@ -28,7 +28,8 @@ class MainActivity : FlutterActivity() {
 				"playAudio" -> {
 					val severity = call.argument<String>("severity") ?: "WARNING"
 					val volume = call.argument<Double>("volume") ?: 0.75
-					AlertCuePlayer.playAudio(this, severity, volume)
+					val cue = call.argument<String>("cue") ?: "BEEP"
+					AlertCuePlayer.playAudio(this, severity, volume, cue)
 					result.success(null)
 				}
 

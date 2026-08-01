@@ -107,6 +107,7 @@ class _PendingPublish {
 class MqttService {
   final DashboardState state;
   final LocalSpoolService _localSpoolService;
+  final Duration mqttRetryInterval;
   MqttTransport _transport;
   int _seqInSession = 0;
   String _lastSessionId = '';
@@ -114,6 +115,8 @@ class MqttService {
   final ListQueue<DecodedMetricEvent> _canonicalEventBuffer = ListQueue();
   final Map<String, double> _lastPublishedValues = {};
   Timer? _flushTimer;
+  Timer? _reconnectTimer;
+  bool _connecting = false;
   bool _isFlushingCanonicalBuffer = false;
 
   String? _lastSentSessionId;
@@ -139,6 +142,7 @@ class MqttService {
     this.state, {
     LocalSpoolService? localSpoolService,
     MqttTransport? transport,
+    this.mqttRetryInterval = const Duration(seconds: 5),
   }) : _localSpoolService = localSpoolService ?? LocalSpoolService(),
        _transport =
            transport ??
@@ -274,8 +278,30 @@ class MqttService {
     );
     await _hydratePendingPublishesFromSpool();
     _startFlushTimer();
+
+    unawaited(_connectOnce());
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer.periodic(mqttRetryInterval, (_) {
+      if (!_isConnected && !_connecting) {
+        unawaited(_connectOnce());
+      }
+    });
+  }
+
+  // Attempts an MQTT connection. On failure it simply returns - the periodic
+  // retry timer keeps trying until the broker (or the network) comes back,
+  // so a cold broker or a late Wi-Fi join no longer leaves the app offline
+  // until restart.
+  Future<void> _connectOnce() async {
+    if (_connecting) {
+      return;
+    }
+    _connecting = true;
     try {
-      debugPrint('Connecting to MQTT via Tailscale...');
+      if (_isConnected) {
+        return;
+      }
+      debugPrint('Connecting to MQTT (${state.mqttHost})...');
       await _transport.connect();
       if (_transport.isConnected) {
         debugPrint('MQTT Connected!');
@@ -287,10 +313,14 @@ class MqttService {
       debugPrint('MQTT Connection Failed: $e');
       _transport.disconnect();
       state.setServerConnectionState(false);
+    } finally {
+      _connecting = false;
     }
   }
 
   void stop() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     state.removeListener(publishSessionMetadata);
     unawaited(_flushCanonicalEventBuffer(drainAll: true));
     _flushTimer?.cancel();

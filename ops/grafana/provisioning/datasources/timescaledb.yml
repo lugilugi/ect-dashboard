@@ -1,18 +1,23 @@
 apiVersion: 1
 
+# NOTE: env vars in provisioning files are expanded with Go os.ExpandEnv
+# semantics - plain ${VAR} only, NO `:-default` fallback syntax (that
+# expands to an empty string). Every TS_DATASOURCE_* variable below is set
+# by the Dockerfile ENV defaults (single container) or docker-compose env
+# (compose stack).
 datasources:
   - name: TimescaleDB
     uid: timescaledb
     type: postgres
     access: proxy
-    url: ${TS_DATASOURCE_URL:-timescaledb:5432}
-    user: ${TS_DATASOURCE_USER:-postgres}
+    url: ${TS_DATASOURCE_URL}
+    user: ${TS_DATASOURCE_USER}
     jsonData:
-      database: ${TS_DATASOURCE_DB:-telemetry}
+      database: ${TS_DATASOURCE_DB}
       sslmode: disable
       postgresVersion: 1500
       timescaledb: true
     secureJsonData:
-      password: ${TS_DATASOURCE_PASSWORD:-postgres}
+      password: ${TS_DATASOURCE_PASSWORD}
     editable: true
     isDefault: true

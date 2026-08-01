@@ -2446,6 +2446,36 @@ class _AlertVariableRowState extends State<_AlertVariableRow> {
                   fontSize: 11,
                 ),
               ),
+              const SizedBox(height: 2),
+              DropdownButton<AlertCue>(
+                value: settings.cue,
+                isDense: true,
+                isExpanded: false,
+                underline: const SizedBox.shrink(),
+                style: TextStyle(
+                  color: p.lightGreen,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                ),
+                iconSize: 12,
+                items: [
+                  for (final cue in AlertCue.values)
+                    DropdownMenuItem<AlertCue>(
+                      value: cue,
+                      child: Text(
+                        'CUE ${cue.label}',
+                        style: TextStyle(fontSize: 9, color: p.cyan),
+                      ),
+                    ),
+                ],
+                onChanged: settings.enabled
+                    ? (value) {
+                        if (value != null) {
+                          widget.state.setAlertVariableCue(spec.key, value);
+                        }
+                      }
+                    : null,
+              ),
             ],
           ),
         ),

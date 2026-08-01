@@ -28,6 +28,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Timer? _blinkTimer;
   bool _blinkOn = true;
 
+  // Offline-state debounce: the orange band + OFFLINE label only appear after
+  // the MQTT link has been down for a while, so transient blips don't flash
+  // the whole top bar (and the STOP button doesn't jitter).
+  static const Duration offlineBandDebounce = Duration(seconds: 3);
+  Timer? _offlineDebounceTimer;
+  bool _offlineShown = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,8 +47,29 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void dispose() {
     _blinkTimer?.cancel();
+    _offlineDebounceTimer?.cancel();
     _pageController.dispose();
     super.dispose();
+  }
+
+  void _syncOfflineDebounce(bool serverConnected) {
+    if (serverConnected) {
+      _offlineDebounceTimer?.cancel();
+      _offlineDebounceTimer = null;
+      // Safe to set directly: this runs during a rebuild that was already
+      // triggered by the connection-state change.
+      _offlineShown = false;
+      return;
+    }
+
+    if (!_offlineShown && _offlineDebounceTimer == null) {
+      _offlineDebounceTimer = Timer(offlineBandDebounce, () {
+        _offlineDebounceTimer = null;
+        if (mounted) {
+          setState(() => _offlineShown = true);
+        }
+      });
+    }
   }
 
   void _showInfoSnackbar(String message) {
@@ -358,6 +386,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             Consumer(
               builder: (context, ref, _) {
                 final state = ref.watch(dashboardStateProvider);
+                _syncOfflineDebounce(state.isServerConnected);
                 return _buildCompactStatusBar(state, p);
               },
             ),
@@ -445,8 +474,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             .clamp(isVeryTight ? 32.0 : 34.0, 40.0)
             .toDouble();
         final onlineLabel = isCompact
-            ? (state.isServerConnected ? 'ON' : 'OFF')
-            : (state.isServerConnected ? 'ONLINE' : 'OFFLINE');
+            ? (_offlineShown ? 'OFF' : 'ON')
+            : (_offlineShown ? 'OFFLINE' : 'ONLINE');
         final sourceColor = state.isSimulated
             ? p.amber
             : (state.isConnected ? p.green : p.red);
@@ -467,7 +496,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             : p.red;
         final gpsStatusLabel = state.gpsLocked ? 'FIX' : 'NO FIX';
 
-        final isServerOffline = !state.isServerConnected;
+        final isServerOffline = _offlineShown;
 
         return Container(
           height: topBarHeight,
@@ -603,6 +632,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     alignment: Alignment.centerRight,
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
+                      // Pins the right edge (DRV/CFG/STOP) in view when the
+                      // indicator content grows, instead of clipping it.
+                      reverse: true,
                       physics: const BouncingScrollPhysics(),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -702,28 +734,48 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           Text(
                             onlineLabel,
                             style: TextStyle(
-                              color: state.isServerConnected ? p.cyan : p.red,
+                              color: _offlineShown ? p.red : p.cyan,
                               fontSize: statusFontSize,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Q:${state.unsentBatchCount}',
-                            style: TextStyle(
-                              color: state.spoolCapacityWarning
-                                  ? p.red
-                                  : (state.unsentBatchCount > 0
-                                        ? p.orange
-                                        : p.lightGreen),
-                              fontSize: detailFontSize,
-                              fontWeight: FontWeight.bold,
-                              fontFamily: 'monospace',
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
+                          if (!isCompact) ...[
+                            const SizedBox(width: 6),
+                            Text(
+                              '@${state.mqttHost}',
+                              style: TextStyle(
+                                color: _offlineShown
+                                    ? p.red.withValues(alpha: 0.85)
+                                    : p.dimText,
+                                fontSize: 9,
+                                fontFamily: 'monospace',
+                              ),
                             ),
-                          ),
+                          ],
+                          // Backlog counter: hidden until the backlog is
+                          // actually significant (>= 100 pending batches), so
+                          // normal small buffers never jitter the layout; the
+                          // fixed width keeps it stable as the count grows.
+                          if (state.unsentBatchCount >= 100) ...[
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 46,
+                              child: Text(
+                                'Q:${state.unsentBatchCount}',
+                                style: TextStyle(
+                                  color: state.spoolCapacityWarning
+                                      ? p.red
+                                      : p.orange,
+                                  fontSize: detailFontSize,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace',
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                           if (state.spoolCapacityWarning && !isTight) ...[
                             const SizedBox(width: 6),
                             Text(

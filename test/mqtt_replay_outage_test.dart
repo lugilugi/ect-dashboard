@@ -95,6 +95,19 @@ class _FailingSpool extends LocalSpoolService {
   }
 }
 
+class _FlakyMqttTransport extends _FakeMqttTransport {
+  int connectAttempts = 0;
+
+  @override
+  Future<void> connect() async {
+    connectAttempts += 1;
+    if (connectAttempts == 1) {
+      throw Exception('broker unreachable');
+    }
+    await super.connect();
+  }
+}
+
 Future<void> _drainMicrotasks([int ticks = 8]) async {
   for (int i = 0; i < ticks; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -336,6 +349,77 @@ void main() {
           contains('"laps_completed":3'),
         );
 
+        state.dispose();
+        await spool.close();
+      },
+    );
+  });
+
+  group('MqttService connect retry', () {
+    test(
+      'keeps retrying a failed initial connect until the broker is reachable',
+      () async {
+        final state = DashboardState();
+        final spool = LocalSpoolService(forceInMemory: true);
+        final transport = _FlakyMqttTransport();
+        final service = MqttService(
+          state,
+          localSpoolService: spool,
+          transport: transport,
+          mqttRetryInterval: const Duration(milliseconds: 50),
+        );
+
+        await service.start();
+        await _drainMicrotasks();
+
+        // Give the 50ms retry timer time to fire after the first failed
+        // attempt and connect on a later one.
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await _drainMicrotasks();
+
+        expect(transport.connectAttempts, greaterThan(1));
+        expect(transport.isConnected, isTrue);
+        expect(state.isServerConnected, isTrue);
+
+        // The retry loop stays quiet once connected.
+        final attemptsAfterConnect = transport.connectAttempts;
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        expect(transport.connectAttempts, attemptsAfterConnect);
+
+        service.stop();
+        state.dispose();
+        await spool.close();
+      },
+    );
+
+    test(
+      'reconnects after an established connection drops',
+      () async {
+        final state = DashboardState();
+        final spool = LocalSpoolService(forceInMemory: true);
+        final transport = _FakeMqttTransport();
+        final service = MqttService(
+          state,
+          localSpoolService: spool,
+          transport: transport,
+          mqttRetryInterval: const Duration(milliseconds: 50),
+        );
+
+        await service.start();
+        await _drainMicrotasks();
+        expect(state.isServerConnected, isTrue);
+
+        // Simulate the broker going away, then coming back.
+        transport.simulateDisconnect();
+        expect(state.isServerConnected, isFalse);
+        expect(transport.isConnected, isFalse);
+
+        transport.simulateReconnect();
+        await _drainMicrotasks();
+        expect(transport.isConnected, isTrue);
+        expect(state.isServerConnected, isTrue);
+
+        service.stop();
         state.dispose();
         await spool.close();
       },

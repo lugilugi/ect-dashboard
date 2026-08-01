@@ -58,6 +58,10 @@ RUN curl -fsSL https://repos.influxdata.com/influxdata-archive.key \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Grafana (Grafana apt repository) -----------------------------------------
+# Uses the latest Grafana from the apt repo. Grafana >=13 changed its default
+# provisioning path to /usr/share/grafana/conf/provisioning, so our
+# provisioning files live in a dedicated dir selected via GF_PATHS_PROVISIONING
+# (see the runtime config below).
 RUN curl -fsSL https://apt.grafana.com/gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/grafana-apt.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/grafana-apt.gpg] https://apt.grafana.com stable main" \
@@ -73,11 +77,13 @@ COPY ops/backend/telegraf.conf /etc/telegraf/telegraf.conf
 COPY ops/backend/export_to_csv.sh /usr/local/bin/export_to_csv.sh
 COPY ops/backend/csv_server.py /usr/local/bin/csv_server.py
 COPY db/schema.sql /docker-entrypoint-initdb.d/01_schema.sql
-COPY ops/grafana/provisioning /etc/grafana/provisioning
+# Provisioning goes in a dedicated dir (not /etc/grafana/provisioning, which
+# the package seeds with sample files) and is selected via GF_PATHS_PROVISIONING.
+COPY ops/grafana/provisioning /etc/grafana/provisioning-ect
 COPY ops/grafana/dashboards /var/lib/grafana/dashboards
 
 RUN chmod +x /usr/local/bin/export_to_csv.sh \
-    && chown -R grafana:grafana /var/lib/grafana/dashboards /etc/grafana/provisioning
+    && chown -R grafana:grafana /var/lib/grafana/dashboards /etc/grafana/provisioning-ect
 
 # --- default configuration (override any of these with `-e`) -------------------
 ENV POSTGRES_DB=telemetry \
@@ -99,7 +105,8 @@ ENV POSTGRES_DB=telemetry \
     TS_DATASOURCE_DB=telemetry \
     TS_DATASOURCE_PASSWORD=postgres \
     EXPORT_DIR=/var/lib/ect-backend/exports \
-    CSV_SERVER_PORT=8080
+    CSV_SERVER_PORT=8080 \
+    GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect
 
 VOLUME ["/var/lib/postgresql/data", "/var/lib/ect-backend/exports"]
 

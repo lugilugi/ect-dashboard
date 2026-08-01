@@ -12,6 +12,7 @@ class _FakeAlertOutput implements DriverAlertOutput {
   Future<void> playAudio({
     required DriverAlertSeverity severity,
     required double volume,
+    AlertCue cue = AlertCue.beep,
   }) async {
     audioEvents.add(severity);
   }

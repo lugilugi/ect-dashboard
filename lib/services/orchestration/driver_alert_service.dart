@@ -10,6 +10,7 @@ abstract class DriverAlertOutput {
   Future<void> playAudio({
     required DriverAlertSeverity severity,
     required double volume,
+    AlertCue cue = AlertCue.beep,
   });
 
   Future<void> playHaptic({required DriverAlertSeverity severity});
@@ -20,16 +21,17 @@ class PlatformDriverAlertOutput implements DriverAlertOutput {
   Future<void> playAudio({
     required DriverAlertSeverity severity,
     required double volume,
+    AlertCue cue = AlertCue.beep,
   }) async {
     try {
-      switch (severity) {
-        case DriverAlertSeverity.advisory:
+      switch (cue) {
+        case AlertCue.beep:
           await SystemSound.play(SystemSoundType.click);
           break;
-        case DriverAlertSeverity.warning:
-          await SystemSound.play(SystemSoundType.alert);
-          break;
-        case DriverAlertSeverity.critical:
+        case AlertCue.doubleBeep:
+        case AlertCue.tripleBeep:
+        case AlertCue.longBeep:
+        case AlertCue.siren:
           await SystemSound.play(SystemSoundType.alert);
           break;
       }
@@ -70,11 +72,13 @@ class AndroidAlertOutput implements DriverAlertOutput {
   Future<void> playAudio({
     required DriverAlertSeverity severity,
     required double volume,
+    AlertCue cue = AlertCue.beep,
   }) async {
     try {
       await _channel.invokeMethod<void>('playAudio', <String, Object?>{
         'severity': severity.wireValue,
         'volume': volume.clamp(0.0, 1.0),
+        'cue': cue.wireValue,
       });
     } on PlatformException catch (e) {
       debugPrint('Android alert audio failed: ${e.message}');
@@ -350,6 +354,7 @@ class DriverAlertService {
               alertCode: 'var_${spec.key.wireValue.toLowerCase()}_min',
               severity: spec.severity,
               reasonClass: 'VAR_$minKey',
+              cue: settings.cue,
             ),
           );
         }
@@ -362,6 +367,7 @@ class DriverAlertService {
               alertCode: 'var_${spec.key.wireValue.toLowerCase()}_max',
               severity: spec.severity,
               reasonClass: 'VAR_$maxKey',
+              cue: settings.cue,
             ),
           );
         }
@@ -376,6 +382,7 @@ class DriverAlertService {
     required String alertCode,
     required DriverAlertSeverity severity,
     required String reasonClass,
+    AlertCue cue = AlertCue.beep,
     bool allowCooldown = true,
     bool allowCriticalRepeat = true,
   }) async {
@@ -389,7 +396,7 @@ class DriverAlertService {
 
     _lastAlertAtByCode[alertCode] = nowUtc;
 
-    await _playCue(severity: severity);
+    await _playCue(severity: severity, cue: cue);
     _state.recordAlertEmission(
       alertCode: alertCode,
       severity: severity,
@@ -432,9 +439,12 @@ class DriverAlertService {
     return nowUtc.difference(previous).inMilliseconds < cooldownMs;
   }
 
-  Future<void> _playCue({required DriverAlertSeverity severity}) async {
+  Future<void> _playCue({
+    required DriverAlertSeverity severity,
+    AlertCue cue = AlertCue.beep,
+  }) async {
     if (_state.alertAudioEnabled) {
-      await _output.playAudio(severity: severity, volume: _state.alertVolume);
+      await _output.playAudio(severity: severity, volume: _state.alertVolume, cue: cue);
     }
 
     if (_state.alertHapticsEnabled) {

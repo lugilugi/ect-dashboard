@@ -4,6 +4,57 @@ enum DriverAlertSeverity {
   critical,
 }
 
+/// Distinct audio cues selectable per alert variable so the driver can tell
+/// which parameter is alarming by sound alone.
+enum AlertCue {
+  beep,
+  doubleBeep,
+  tripleBeep,
+  longBeep,
+  siren,
+}
+
+extension AlertCueWire on AlertCue {
+  String get wireValue {
+    switch (this) {
+      case AlertCue.beep:
+        return 'BEEP';
+      case AlertCue.doubleBeep:
+        return 'DOUBLE_BEEP';
+      case AlertCue.tripleBeep:
+        return 'TRIPLE_BEEP';
+      case AlertCue.longBeep:
+        return 'LONG_BEEP';
+      case AlertCue.siren:
+        return 'SIREN';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case AlertCue.beep:
+        return 'BEEP';
+      case AlertCue.doubleBeep:
+        return 'DOUBLE';
+      case AlertCue.tripleBeep:
+        return 'TRIPLE';
+      case AlertCue.longBeep:
+        return 'LONG';
+      case AlertCue.siren:
+        return 'SIREN';
+    }
+  }
+}
+
+AlertCue alertCueFromWire(String value) {
+  for (final cue in AlertCue.values) {
+    if (cue.wireValue == value) {
+      return cue;
+    }
+  }
+  return AlertCue.beep;
+}
+
 extension DriverAlertSeverityWire on DriverAlertSeverity {
   String get wireValue {
     switch (this) {
@@ -82,6 +133,9 @@ class AlertVariableSpec {
   final int fractionDigits;
   final bool defaultEnabled;
 
+  /// Distinct audio cue for this variable's alerts.
+  final AlertCue defaultCue;
+
   /// The car-off default the dashboard holds before CAN data flows.
   /// While a variable still reads this exact value it has no live data,
   /// so threshold evaluation is skipped to avoid startup false alarms.
@@ -97,6 +151,7 @@ class AlertVariableSpec {
     required this.restValue,
     this.fractionDigits = 1,
     this.defaultEnabled = true,
+    this.defaultCue = AlertCue.beep,
   });
 }
 
@@ -118,6 +173,7 @@ const List<AlertVariableSpec> alertVariableSpecs = <AlertVariableSpec>[
     defaultMax: 60,
     severity: DriverAlertSeverity.warning,
     restValue: 0,
+    defaultCue: AlertCue.doubleBeep,
   ),
   AlertVariableSpec(
     key: AlertVariableKey.power,
@@ -128,6 +184,7 @@ const List<AlertVariableSpec> alertVariableSpecs = <AlertVariableSpec>[
     severity: DriverAlertSeverity.critical,
     fractionDigits: 0,
     restValue: 0,
+    defaultCue: AlertCue.tripleBeep,
   ),
   AlertVariableSpec(
     key: AlertVariableKey.speed,
@@ -148,6 +205,7 @@ const List<AlertVariableSpec> alertVariableSpecs = <AlertVariableSpec>[
     severity: DriverAlertSeverity.critical,
     fractionDigits: 0,
     restValue: 45,
+    defaultCue: AlertCue.longBeep,
   ),
   AlertVariableSpec(
     key: AlertVariableKey.battTemp,
@@ -158,6 +216,7 @@ const List<AlertVariableSpec> alertVariableSpecs = <AlertVariableSpec>[
     severity: DriverAlertSeverity.critical,
     fractionDigits: 0,
     restValue: 35,
+    defaultCue: AlertCue.doubleBeep,
   ),
   AlertVariableSpec(
     key: AlertVariableKey.bmsMinCell,
@@ -168,6 +227,7 @@ const List<AlertVariableSpec> alertVariableSpecs = <AlertVariableSpec>[
     severity: DriverAlertSeverity.critical,
     fractionDigits: 2,
     restValue: 3.80,
+    defaultCue: AlertCue.siren,
   ),
   AlertVariableSpec(
     key: AlertVariableKey.bus12V,
@@ -177,6 +237,7 @@ const List<AlertVariableSpec> alertVariableSpecs = <AlertVariableSpec>[
     defaultMax: 14.6,
     severity: DriverAlertSeverity.warning,
     restValue: 12.4,
+    defaultCue: AlertCue.longBeep,
   ),
 ];
 
@@ -184,17 +245,20 @@ class AlertVariableSettings {
   bool enabled;
   double minThreshold;
   double maxThreshold;
+  AlertCue cue;
 
   AlertVariableSettings({
     required this.enabled,
     required this.minThreshold,
     required this.maxThreshold,
+    this.cue = AlertCue.beep,
   });
 
   Map<String, Object?> toJson() => <String, Object?>{
         'enabled': enabled,
         'min': minThreshold,
         'max': maxThreshold,
+        'cue': cue.wireValue,
       };
 
   static AlertVariableSettings? fromJson(Map<String, Object?> json) {
@@ -208,6 +272,7 @@ class AlertVariableSettings {
       enabled: enabled,
       minThreshold: minValue.toDouble(),
       maxThreshold: maxValue.toDouble(),
+      cue: alertCueFromWire(json['cue'] as String? ?? 'BEEP'),
     );
   }
 }

@@ -37,7 +37,8 @@ void main() {
     expect(find.text('DRV'), findsOneWidget);
     expect(find.text('CFG'), findsOneWidget);
     expect(find.text('HOLD'), findsOneWidget);
-    expect(find.textContaining('Q:0'), findsWidgets);
+    // Backlog counter is hidden while the backlog is below the threshold.
+    expect(find.textContaining('Q:'), findsNothing);
   });
 
   testWidgets('long-press HOLD opens the start-session dialog', (tester) async {

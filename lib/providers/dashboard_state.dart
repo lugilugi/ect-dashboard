@@ -79,6 +79,7 @@ class AlertStateStore {
         enabled: spec.defaultEnabled,
         minThreshold: spec.defaultMin,
         maxThreshold: spec.defaultMax,
+        cue: spec.defaultCue,
       ),
   };
 }
@@ -857,6 +858,15 @@ class DashboardState extends ChangeNotifier {
       return;
     }
     settings.maxThreshold = value;
+    notifyListeners();
+  }
+
+  void setAlertVariableCue(AlertVariableKey key, AlertCue cue) {
+    final settings = _alerts.alertVariables[key];
+    if (settings == null || settings.cue == cue) {
+      return;
+    }
+    settings.cue = cue;
     notifyListeners();
   }
 

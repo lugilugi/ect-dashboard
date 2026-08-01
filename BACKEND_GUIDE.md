@@ -513,6 +513,7 @@ ORDER BY lap_number::int, ts_session_ms::bigint;
 | Telegraf log: `08P01: insufficient data left in message` / `22P03: incorrect binary data format` on `COPY telemetry_raw` | Tag columns were typed `uuid`/`int`/`bigint` in an older schema. Telegraf's `outputs.postgresql` (≥1.31) COPYs in **binary** format and encodes tags as strings — columns must be TEXT. `ALTER TABLE telemetry_raw ALTER COLUMN <col> TYPE text;` (see [Section 7](#7-database-schema-overview)). |
 | Sessions messages don't reach the `sessions` table | `uid` in `sessions_ingest_view` must be TEXT (cast to `uuid` in the trigger). Also ensure `vehicle_setup` is NOT in `included_keys` — a nested object makes `json_v2` emit zero metrics. |
 | Grafana shows datasource error              | `TS_DATASOURCE_URL/PASSWORD` wrong for the deployment type (single: `localhost:5432`, Compose: `timescaledb:5432`). |
+| Grafana loads no dashboards / no datasource | Grafana ≥13 defaults the provisioning path to `/usr/share/grafana/conf/provisioning` — the single container sets `GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect`. Also: provisioning env vars use Go `os.ExpandEnv` semantics — plain `${VAR}` only, the `:-default` syntax expands to an **empty string** (silently broken datasource). |
 | Schema not applied on an existing container | `/docker-entrypoint-initdb.d` runs only on an **empty** data volume — wipe it (`docker compose down -v` or `docker volume rm`). |
 | MQTT refused on non-local host              | Broker binds `0.0.0.0` — check host firewall/security group on port 1883. |
 

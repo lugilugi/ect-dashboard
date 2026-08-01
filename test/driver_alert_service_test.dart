@@ -7,14 +7,17 @@ import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.
 
 class _FakeAlertOutput implements DriverAlertOutput {
   final List<DriverAlertSeverity> audioEvents = <DriverAlertSeverity>[];
+  final List<AlertCue> audioCues = <AlertCue>[];
   final List<DriverAlertSeverity> hapticEvents = <DriverAlertSeverity>[];
 
   @override
   Future<void> playAudio({
     required DriverAlertSeverity severity,
     required double volume,
+    AlertCue cue = AlertCue.beep,
   }) async {
     audioEvents.add(severity);
+    audioCues.add(cue);
   }
 
   @override
@@ -250,6 +253,35 @@ void main() {
       expect(output.audioCount(DriverAlertSeverity.warning), 1);
       expect(state.lastAlertCode, 'var_voltage_min');
       expect(state.lastAlertReasonClass, 'VAR_VOLTAGE_MIN');
+
+      service.stop();
+      state.dispose();
+    });
+
+    test('uses the per-variable audio cue', () async {
+      final state = DashboardState();
+      final output = _FakeAlertOutput();
+      final service = DriverAlertService(state: state, output: output);
+      service.start();
+
+      state.restoreFromCheckpoint(_loggingSnapshot(sessionId: 'session-var-cue'));
+      state.setAlertHapticsEnabled(false);
+
+      state.setAlertVariableCue(AlertVariableKey.mcTemp, AlertCue.siren);
+      state.mcTempC = 90;
+      state.notifyListeners();
+      await _drainQueue();
+
+      expect(state.lastAlertCode, 'var_mc_temp_max');
+      expect(output.audioCues, contains(AlertCue.siren));
+
+      state.setAlertVariableCue(AlertVariableKey.voltage, AlertCue.doubleBeep);
+      state.mainVoltage = 20;
+      state.notifyListeners();
+      await _drainQueue();
+
+      expect(state.lastAlertCode, 'var_voltage_min');
+      expect(output.audioCues, contains(AlertCue.doubleBeep));
 
       service.stop();
       state.dispose();
