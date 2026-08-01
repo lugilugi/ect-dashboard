@@ -641,18 +641,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             ),
                           ],
                           const SizedBox(width: 10),
-                          Text(
-                            'LAP ${state.lapProgressText}',
-                            style: TextStyle(
-                              color: p.lightGreen,
-                              fontSize: statusFontSize,
-                              fontWeight: FontWeight.bold,
-                              fontFamily: 'monospace',
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                          ),
                           if (!isCompact) ...[
                             const SizedBox(width: 8),
                             Text(

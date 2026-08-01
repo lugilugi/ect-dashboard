@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,11 +9,6 @@ import 'providers/app_providers.dart';
 import 'repositories/can_ingest_repository.dart';
 import 'package:telemetry_dashboard/services/orchestration/telemetry_runtime_coordinator.dart';
 import 'package:telemetry_dashboard/ui/screens/dashboard_screen.dart';
-
-import 'dart:convert';
-import 'package:flutter_libserialport/flutter_libserialport.dart';
-import 'package:usb_serial/usb_serial.dart';
-
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   final router = GoRouter(
@@ -139,14 +133,10 @@ class _TelemetryAppState extends ConsumerState<TelemetryApp> {
       canIngestRepository: widget.canIngestRepository,
     );
 
-    // Auto-detect device and use the correct serial method
-    if (Platform.isAndroid) {
-      // Use this if phone ang gamit
-      listenToEsp32Android(widget.canIngestRepository);
-    } else if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
-      // Use this if laptop ang gamit
-      listenToEsp32(widget.canIngestRepository, 'COM3');//change com port if not com 3 gamit
-    }
+    // USB ingest is handled entirely by UsbService inside the coordinator:
+    // Android uses usb_serial, and desktops fall back to the serial port
+    // (default COM3, override with
+    // --dart-define=DESKTOP_SERIAL_PORT=COM5). See usb_service.dart.
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final runtimeCoordinator = _runtimeCoordinator;
@@ -170,76 +160,3 @@ class _TelemetryAppState extends ConsumerState<TelemetryApp> {
   }
 }
 
-void listenToEsp32(CanIngestRepository repo, String comPort) {
-  final port = SerialPort(comPort);
-  
-  if (!port.openRead()) {
-    debugPrint('Failed to open serial port $comPort: ${SerialPort.lastError}');
-    return;
-  }
-
-  // Ensure the baud rate matches your ESP32's Serial.begin()
-  final config = port.config;
-  config.baudRate = 115200; // Change to 500000 if you set that in ESP-IDF
-  port.config = config;
-
-  final reader = SerialPortReader(port);
-  String buffer = '';
-
-  reader.stream.listen((Uint8List data) {
-    buffer += utf8.decode(data);
-    final lines = buffer.split('\n');
-    
-    // Keep the last incomplete line in the buffer until the next chunk arrives
-    buffer = lines.removeLast();
-
-    for (final line in lines) {
-      final trimmed = line.trim();
-      if (trimmed.isNotEmpty) {
-        // Feed the perfectly formatted string into the dashboard's parser
-        repo.ingestLine(trimmed, source: comPort);
-      }
-    }
-  });
-}
-
-Future<void> listenToEsp32Android(CanIngestRepository repo) async {
-  //Find connected USB devices
-  List<UsbDevice> devices = await UsbSerial.listDevices();
-  if (devices.isEmpty) {
-    debugPrint('No USB devices found on phone.');
-    return;
-  }
-
-  //Connect to the first available device (your ESP32)
-  UsbPort? port = await devices.first.create();
-  if (port == null) return;
-
-  bool openResult = await port.open();
-  if (!openResult) {
-    debugPrint('Failed to open Android USB port.');
-    return;
-  }
-
-  //Configure CDC parameters
-  await port.setDTR(true);
-  await port.setRTS(true);
-  port.setPortParameters(115200, UsbPort.DATABITS_8, UsbPort.STOPBITS_1, UsbPort.PARITY_NONE);
-
-  String buffer = '';
-
-  //Listen to the stream just like on Windows
-  port.inputStream!.listen((Uint8List data) {
-    buffer += utf8.decode(data);
-    final lines = buffer.split('\n');
-    
-    buffer = lines.removeLast();
-
-    for (final line in lines) {
-      final trimmed = line.trim();
-      if (trimmed.isNotEmpty) {
-        repo.ingestLine(trimmed, source: 'android_otg');
-      }
-    }
-  });
-}

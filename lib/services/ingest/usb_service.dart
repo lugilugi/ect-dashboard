@@ -9,6 +9,7 @@ import 'package:telemetry_dashboard/services/persistence/local_spool_service.dar
 import 'package:telemetry_dashboard/repositories/can_ingest_repository.dart';
 import 'package:usb_serial/transaction.dart';
 import 'package:usb_serial/usb_serial.dart';
+import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_signal_registry.dart';
@@ -25,6 +26,18 @@ class UsbService {
   bool _usbPluginUnavailable = false;
   bool _reportedUsbPluginUnavailable = false;
   bool _ingestRepositoryAttached = false;
+
+  // Desktop serial (Windows/macOS/Linux) fallback when usb_serial is
+  // unavailable. Configured with --dart-define=DESKTOP_SERIAL_PORT=COM5,
+  // or edit the default below. Baud is informational for ESP32-C3 CDC-ACM
+  // (USB Serial/JTAG) but matters for classic UART bridges.
+  static const String defaultDesktopSerialPort = String.fromEnvironment(
+    'DESKTOP_SERIAL_PORT',
+    defaultValue: 'COM3',
+  );
+
+  SerialPort? _desktopPort;
+  StreamSubscription<Uint8List>? _desktopSubscription;
 
   String _lineBuffer = "";
   final RegExp _candumpRegex = RegExp(r'can0\s+([0-9a-fA-F]+)#([0-9a-fA-F]*)');
@@ -66,8 +79,11 @@ class UsbService {
   ]);
 
   void sendString(String data) {
+    final bytes = Uint8List.fromList(data.codeUnits);
     if (_port != null) {
-      _port!.write(Uint8List.fromList(data.codeUnits));
+      _port!.write(bytes);
+    } else if (_desktopPort != null) {
+      _desktopPort!.write(bytes);
     } else if (state.isSimulated) {
       debugPrint("SIMULATED TX: $data");
     }
@@ -95,7 +111,7 @@ class UsbService {
     }
 
     _stopMockSimulation();
-    if (_port == null && !_usbPluginUnavailable) {
+    if (_port == null && _desktopPort == null) {
       unawaited(_connect());
     }
   }
@@ -105,19 +121,9 @@ class UsbService {
       unawaited(_startIngestRepositoryBridge());
     }
 
-    if (_usbPluginUnavailable) {
-      if (state.enableSimulation) {
-        _startMockSimulation();
-      }
-      return;
-    }
-
     _connect();
     _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (_usbPluginUnavailable) {
-        return;
-      }
-      if (_port == null && _mockTimer == null) {
+      if (_port == null && _desktopPort == null && _mockTimer == null) {
         _connect();
       }
     });
@@ -127,6 +133,8 @@ class UsbService {
     _reconnectTimer?.cancel();
     _mockTimer?.cancel();
     _subscription?.cancel();
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
     _canFrameSubscription?.cancel();
     _canFrameSubscription = null;
     _canParseErrorSubscription?.cancel();
@@ -135,6 +143,8 @@ class UsbService {
     _transaction?.dispose();
     _port?.close();
     _port = null;
+    _desktopPort?.close();
+    _desktopPort = null;
     state.setSimulatedState(false);
     state.setConnectionState(false);
   }
@@ -146,36 +156,33 @@ class UsbService {
       return;
     }
 
-    if (_usbPluginUnavailable) {
-      return;
-    }
-
     List<UsbDevice> devices = [];
     try {
       devices = await UsbSerial.listDevices();
     } catch (e) {
       if (e is MissingPluginException) {
+        // usb_serial is Android-only; fall back to the desktop serial port
+        // (Windows/macOS/Linux) so the laptop can ingest from the ESP32 too.
         _usbPluginUnavailable = true;
         if (!_reportedUsbPluginUnavailable) {
           debugPrint(
-            'USB serial plugin unavailable on this platform. USB ingest disabled.',
+            'usb_serial plugin unavailable; using desktop serial '
+            '$_desktopPortName().',
           );
           _reportedUsbPluginUnavailable = true;
         }
-        state.setConnectionState(false);
-        if (state.enableSimulation) {
-          _startMockSimulation();
-        } else {
-          _stopMockSimulation();
-        }
+        await _connectDesktopSerial();
         return;
       }
 
       debugPrint("USB list error: $e");
+      return;
     }
 
     if (devices.isEmpty) {
-      if (state.enableSimulation) {
+      if (_usbPluginUnavailable) {
+        await _connectDesktopSerial();
+      } else if (state.enableSimulation) {
         _startMockSimulation();
       } else {
         _stopMockSimulation();
@@ -185,45 +192,105 @@ class UsbService {
 
     _stopMockSimulation();
 
-    UsbDevice espDevice = devices.firstWhere(
-      (d) => d.vid == _espVid && d.pid == _espPid,
-      orElse: () =>
-          devices.first, // Fallback to first device if no ESP32-C3 found
-    );
-    _port = await espDevice.create();
+    try {
+      UsbDevice espDevice = devices.firstWhere(
+        (d) => d.vid == _espVid && d.pid == _espPid,
+        orElse: () =>
+            devices.first, // Fallback to first device if no ESP32-C3 found
+      );
+      _port = await espDevice.create();
 
-    if (_port == null) return;
+      if (_port == null) return;
 
-    bool openResult = await _port!.open();
-    if (!openResult) {
+      bool openResult = await _port!.open();
+      if (!openResult) {
+        _port = null;
+        return;
+      }
+
+      await _port!.setDTR(true);
+      await _port!.setRTS(true);
+      // Note: For CDC-ACM (ESP32-C3 USB Serial/JTAG), baud rate is
+      // informational only — data moves at USB speed. Set to match
+      // CAN_BAUD_RATE for consistency.
+      await _port!.setPortParameters(
+        500000,
+        UsbPort.DATABITS_8,
+        UsbPort.STOPBITS_1,
+        UsbPort.PARITY_NONE,
+      );
+
+      state.setConnectionState(true);
+
+      _subscription = _port!.inputStream?.listen(
+        (Uint8List event) {
+          _processBytes(event);
+        },
+        onDone: () {
+          _handleDisconnect();
+        },
+        onError: (e) {
+          _handleDisconnect();
+        },
+      );
+    } catch (e) {
+      // e.g. the user denied the USB permission dialog — retry later via
+      // the reconnect timer instead of surfacing an unhandled error.
+      debugPrint('Android USB open failed: $e');
+      await _port?.close();
       _port = null;
+      state.setConnectionState(false);
+    }
+  }
+
+  String _desktopPortName() => defaultDesktopSerialPort;
+
+  Future<void> _connectDesktopSerial() async {
+    if (_desktopPort != null) {
       return;
     }
 
-    await _port!.setDTR(true);
-    await _port!.setRTS(true);
-    // Note: For CDC-ACM (ESP32-C3 USB Serial/JTAG), baud rate is informational
-    // only — data moves at USB speed. Set to match CAN_BAUD_RATE for consistency.
-    await _port!.setPortParameters(
-      500000,
-      UsbPort.DATABITS_8,
-      UsbPort.STOPBITS_1,
-      UsbPort.PARITY_NONE,
-    );
+    final portName = _desktopPortName();
+    try {
+      final port = SerialPort(portName);
+      if (!port.openRead()) {
+        debugPrint(
+          'Failed to open desktop serial port $portName: '
+          '${SerialPort.lastError}',
+        );
+        return;
+      }
 
-    state.setConnectionState(true);
+      // For ESP32-C3 USB Serial/JTAG (CDC-ACM) the baud rate is informational;
+      // for classic UART bridges it must match the firmware (115200 typical).
+      final config = port.config;
+      config.baudRate = 115200;
+      port.config = config;
 
-    _subscription = _port!.inputStream?.listen(
-      (Uint8List event) {
-        _processBytes(event);
-      },
-      onDone: () {
-        _handleDisconnect();
-      },
-      onError: (e) {
-        _handleDisconnect();
-      },
-    );
+      _desktopPort = port;
+      state.setConnectionState(true);
+
+      _desktopSubscription = SerialPortReader(port).stream.listen(
+        _processBytes,
+        onDone: _handleDesktopDisconnect,
+        onError: (Object e) {
+          debugPrint('Desktop serial stream error: $e');
+          _handleDesktopDisconnect();
+        },
+      );
+    } catch (e) {
+      debugPrint('Desktop serial connect error for $portName: $e');
+      _desktopPort?.close();
+      _desktopPort = null;
+    }
+  }
+
+  void _handleDesktopDisconnect() {
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
+    _desktopPort?.close();
+    _desktopPort = null;
+    state.setConnectionState(false);
   }
 
   void _handleDisconnect() {

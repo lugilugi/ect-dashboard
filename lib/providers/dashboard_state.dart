@@ -14,8 +14,23 @@ import 'package:telemetry_dashboard/services/persistence/readable_local_copy_wri
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 
-class _SessionTicker {
-  final SessionControlStore _sessionControl;
+/// A single completed lap crossing (geofence mode), with the GPS position
+/// where the finish line was crossed. Bounded history for map visuals.
+class LapCrossingRecord {
+  final int lapNumber;
+  final double lat;
+  final double lon;
+  final DateTime tsWallUtc;
+
+  const LapCrossingRecord({
+    required this.lapNumber,
+    required this.lat,
+    required this.lon,
+    required this.tsWallUtc,
+  });
+}
+
+class _SessionTicker {  final SessionControlStore _sessionControl;
   final VoidCallback _onTick;
 
   Timer? _timer;
@@ -237,6 +252,32 @@ class DashboardState extends ChangeNotifier {
   double distanceLapDividerKm = 0.25;
   int gpsFallbackPeriodMs = 5000;
   double? _nextDistanceDividerKm;
+  bool _lapBoundaryConfigured = false;
+  static const int maxLapCrossingRecords = 12;
+  final List<LapCrossingRecord> _lapCrossings = <LapCrossingRecord>[];
+
+  bool get lapBoundaryConfigured => _lapBoundaryConfigured;
+  List<LapCrossingRecord> get lapCrossings =>
+      List<LapCrossingRecord>.unmodifiable(_lapCrossings);
+
+  void _recordLapCrossing({
+    required int lapNumber,
+    required double lat,
+    required double lon,
+    required DateTime tsWallUtc,
+  }) {
+    _lapCrossings.add(
+      LapCrossingRecord(
+        lapNumber: lapNumber,
+        lat: lat,
+        lon: lon,
+        tsWallUtc: tsWallUtc.toUtc(),
+      ),
+    );
+    if (_lapCrossings.length > maxLapCrossingRecords) {
+      _lapCrossings.removeAt(0);
+    }
+  }
 
   bool get isLogging => _isLogging;
   String get sessionName => _sessionName;
@@ -246,7 +287,6 @@ class DashboardState extends ChangeNotifier {
   LapPhase get lapPhase => _lapPhase;
 
   String get sessionStateWire => _sessionState.wireValue;
-  String get lapProgressText => '$lapNumber';
 
   bool get deadzoneActive => crossingDeadzoneRemainingMs > 0;
 
@@ -591,6 +631,7 @@ class DashboardState extends ChangeNotifier {
     endBlockReason = null;
     lastCrossingReason = null;
     _nextDistanceDividerKm = null;
+    _lapCrossings.clear();
     _lapBoundaryService.resetTracking();
     notifyListeners();
   }
@@ -600,6 +641,7 @@ class DashboardState extends ChangeNotifier {
     _lapBoundaryService.setDeadzone(
       Duration(milliseconds: crossingDeadzoneMs),
     );
+    _lapBoundaryConfigured = true;
     notifyListeners();
   }
 
@@ -673,6 +715,12 @@ class DashboardState extends ChangeNotifier {
         _applySessionControlState(nextControl);
         lastCrossingReason = null;
         lapNumber = max(1, lapsCompleted + 1);
+        _recordLapCrossing(
+          lapNumber: lapsCompleted,
+          lat: lat,
+          lon: lon,
+          tsWallUtc: sampleTimestampUtc,
+        );
         notifyListeners();
         return;
     }

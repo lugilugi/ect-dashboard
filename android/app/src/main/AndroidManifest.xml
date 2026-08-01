@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- USB host mode: the app ingests CAN data from the ESP32-C3 over USB
+         (CDC-ACM / USB Serial-JTAG). The usb_serial plugin requests runtime
+         permission to access the device the first time it is opened. -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>

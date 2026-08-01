@@ -530,6 +530,30 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                               ),
                             ],
                           ),
+                        // Active (applied) finish line — distinct from the
+                        // cyan draft so the real crossing boundary is always
+                        // visible on the map.
+                        if (state.lapBoundaryConfigured)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: [
+                                  LatLng(
+                                    state.lapBoundaryStart.lat,
+                                    state.lapBoundaryStart.lon,
+                                  ),
+                                  LatLng(
+                                    state.lapBoundaryEnd.lat,
+                                    state.lapBoundaryEnd.lon,
+                                  ),
+                                ],
+                                strokeWidth: 7.0,
+                                color: p.amber,
+                                borderColor: Colors.black.withValues(alpha: 0.65),
+                                borderStrokeWidth: 2.0,
+                              ),
+                            ],
+                          ),
                         MarkerLayer(
                           markers: [
                             if (state.hasCurrentGpsSample)
@@ -552,6 +576,15 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                                 width: 26,
                                 height: 26,
                                 child: _buildGeofenceMarker('B', p.red),
+                              ),
+                            // Completed lap crossings (geofence mode) —
+                            // numbered dots where the finish line was crossed.
+                            for (final crossing in state.lapCrossings)
+                              Marker(
+                                point: LatLng(crossing.lat, crossing.lon),
+                                width: 22,
+                                height: 22,
+                                child: _buildCrossingMarker(crossing),
                               ),
                           ],
                         ),
@@ -576,6 +609,22 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
           const SizedBox(height: 10),
           _infoRow('START', _formatLatLng(_draftGeofenceStart)),
           _infoRow('END', _formatLatLng(_draftGeofenceEnd)),
+          _infoRow(
+            'ACTIVE LINE',
+            state.lapBoundaryConfigured
+                ? 'SET (${_formatLatLng(LatLng(state.lapBoundaryStart.lat, state.lapBoundaryStart.lon))} → ${_formatLatLng(LatLng(state.lapBoundaryEnd.lat, state.lapBoundaryEnd.lon))})'
+                : 'DEFAULT',
+            valueColor: state.lapBoundaryConfigured ? p.amber : p.dimText,
+          ),
+          _infoRow(
+            'LAPS CROSSED',
+            state.lapCrossings.isEmpty
+                ? 'NONE'
+                : '${state.lapCrossings.length} (LAP ${state.lapCrossings.last.lapNumber})',
+            valueColor: state.lapCrossings.isEmpty
+                ? p.dimText
+                : p.lightGreen,
+          ),
           _infoRow(
             'CURRENT GPS',
             _currentGpsText,
@@ -674,6 +723,25 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
           color: p.light ? Colors.white : Colors.black,
           fontWeight: FontWeight.bold,
           fontSize: 10,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCrossingMarker(LapCrossingRecord crossing) {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: p.amber,
+        border: Border.all(color: p.bg, width: 2),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        '${crossing.lapNumber}',
+        style: TextStyle(
+          color: p.light ? Colors.white : Colors.black,
+          fontWeight: FontWeight.bold,
+          fontSize: 9,
         ),
       ),
     );
