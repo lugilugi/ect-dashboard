@@ -108,7 +108,7 @@ jobs:
           path: build/app/outputs/flutter-apk/ect-dashboard.apk
 
       - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: build/app/outputs/flutter-apk/ect-dashboard.apk
