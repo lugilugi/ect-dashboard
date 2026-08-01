@@ -43,6 +43,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write # Needed to create a GitHub Release
+    # The `secrets` context cannot be used directly in step `if:` conditions,
+    # so the keystore presence is resolved once here at job level.
+    env:
+      HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -73,7 +77,7 @@ jobs:
       # Signing correctly is what lets you update the app in place from
       # GitHub Releases instead of uninstalling and reinstalling.
       - name: Decode release keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
           cat > android/key.properties <<EOF
@@ -87,7 +91,7 @@ jobs:
       - name: Derive version from tag
         id: version
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "build_name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             echo "build_name=1.0.0" >> "$GITHUB_OUTPUT"
