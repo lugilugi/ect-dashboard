@@ -90,8 +90,11 @@ class TelemetryRuntimeCoordinator {
     _setWakelock(false);
     _canTxService.dispose();
     _usbService.stop();
-    _mqttService.stop();
-    unawaited(_localSpoolService.close());
+    // Drain the final canonical flush (publish or spool) before closing the
+    // SQLite database so no last-second payload is lost on app exit.
+    unawaited(
+      _mqttService.stop().whenComplete(() => _localSpoolService.close()),
+    );
   }
 
   void _initializeRuntime() {

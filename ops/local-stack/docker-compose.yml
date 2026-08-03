@@ -59,8 +59,28 @@ services:
       TS_HOST: timescaledb
       TS_PORT: 5432
       TS_DB: ${POSTGRES_DB:-telemetry}
-      TS_USER: postgres
-      TS_PASSWORD: postgres
+      TS_USER: ${POSTGRES_USER:-postgres}
+      TS_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    networks:
+      - telemetry_net
+
+  csv-streamer:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.csv-streamer
+    container_name: ect-csv-streamer
+    depends_on:
+      mosquitto:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      TOPIC_EVENTS: ${TOPIC_EVENTS:-telemetry/eco_archers/events}
+      TOPIC_SESSIONS: ${TOPIC_SESSIONS:-telemetry/eco_archers/sessions}
+      EXPORT_DIR: /exports
+    volumes:
+      - ../../csv_exports:/exports
     networks:
       - telemetry_net
 

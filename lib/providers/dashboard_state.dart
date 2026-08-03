@@ -1181,6 +1181,12 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 30 Hz render tick for the driver display. UI widgets subscribe to this
+  /// instead of the telemetry notification storm so the grid renders at a
+  /// stable cadence regardless of CAN frame rate.
+  final ValueNotifier<int> uiFrame = ValueNotifier<int>(0);
+  Timer? _uiFrameTimer;
+
   // Session timer
   late final _SessionTicker _sessionTicker;
 
@@ -1197,11 +1203,18 @@ class DashboardState extends ChangeNotifier {
       onTick: notifyListeners,
     );
     _sessionTicker.start();
+    _uiFrameTimer = Timer.periodic(
+      const Duration(milliseconds: 33),
+      (_) => uiFrame.value++,
+    );
   }
 
   @override
   void dispose() {
     _sessionTicker.stop();
+    _uiFrameTimer?.cancel();
+    _uiFrameTimer = null;
+    uiFrame.dispose();
     _spoolHealth.removeListener(_handleSpoolHealthChanged);
     if (_ownsSpoolHealth) {
       _spoolHealth.dispose();

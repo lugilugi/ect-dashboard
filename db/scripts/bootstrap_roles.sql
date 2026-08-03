@@ -44,3 +44,6 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT ON TABLES TO grafana_reader;
+
+-- Bound runaway dashboard queries so Grafana can never bog down the host.
+ALTER ROLE grafana_reader SET statement_timeout = '30s';

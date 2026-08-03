@@ -56,6 +56,8 @@ class UsbService {
   SerialPort? _desktopPort;
   StreamSubscription<Uint8List>? _desktopSubscription;
 
+  static const int maxLineBufferBytes = 64 * 1024;
+  static const int maxLineBytes = 8 * 1024;
   String _lineBuffer = "";
   final RegExp _candumpRegex = RegExp(r'can0\s+([0-9a-fA-F]+)#([0-9a-fA-F]*)');
 
@@ -720,11 +722,28 @@ class UsbService {
     _rxBytesTotal += newBytes.length;
     String chunk = String.fromCharCodes(newBytes);
     _lineBuffer += chunk;
+    if (_lineBuffer.length > maxLineBufferBytes) {
+      debugLog.warn(
+        'Serial line buffer overflow; dropping oldest partial data '
+        '(${_lineBuffer.length} bytes buffered).',
+      );
+      final keepFrom = _lineBuffer.lastIndexOf('\n') + 1;
+      _lineBuffer = keepFrom > 0
+          ? _lineBuffer.substring(keepFrom)
+          : '';
+    }
     int newlineIndex;
     while ((newlineIndex = _lineBuffer.indexOf('\n')) != -1) {
       String line = _lineBuffer.substring(0, newlineIndex).trim();
       _lineBuffer = _lineBuffer.substring(newlineIndex + 1);
-      if (line.isNotEmpty) {
+      if (line.isEmpty) {
+        continue;
+      }
+      if (line.length > maxLineBytes) {
+        debugLog.warn('Dropping over-long serial line (${line.length} bytes).');
+        continue;
+      }
+      {
         _rxLinesTotal += 1;
         canTxService?.handleIncomingLine(line);
         final repo = canIngestRepository;

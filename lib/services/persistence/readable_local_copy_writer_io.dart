@@ -40,6 +40,7 @@ class ReadableLocalCopyWriter {
   int _maxFileBytes;
 
   Directory? _rootDirectory;
+  final Map<String, IOSink> _sinks = <String, IOSink>{};
 
   ReadableLocalCopyWriter({int maxFileBytes = 4 * 1024 * 1024})
     : _maxFileBytes = maxFileBytes;
@@ -120,12 +121,31 @@ class ReadableLocalCopyWriter {
         .join(',');
     buffer.writeln(rowValues);
 
-    await file.writeAsString(
-      buffer.toString(),
-      mode: FileMode.append,
-      flush: false,
-    );
+    _sinkFor(filePath).write(buffer.toString());
     return file.path;
+  }
+
+  IOSink _sinkFor(String filePath) {
+    return _sinks.putIfAbsent(
+      filePath,
+      () => File(filePath).openWrite(mode: FileMode.append),
+    );
+  }
+
+  Future<void> _closeSink(String filePath) async {
+    final sink = _sinks.remove(filePath);
+    if (sink != null) {
+      await sink.flush();
+      await sink.close();
+    }
+  }
+
+  /// Flushes every open session CSV to the OS (called once per second by
+  /// [LocalSpoolService] so a sudden power loss costs at most ~1s of rows).
+  Future<void> flush() async {
+    for (final sink in _sinks.values) {
+      await sink.flush();
+    }
   }
 
   Future<ReadableLocalCopyPreview> readPreview({
@@ -184,6 +204,7 @@ class ReadableLocalCopyWriter {
       return null;
     }
 
+    await flush();
     final sourceFiles = await _listReadableFiles(root);
 
     if (sourceFiles.isEmpty) {
@@ -236,7 +257,13 @@ class ReadableLocalCopyWriter {
     for (final entity in files) {
       final stat = await entity.stat();
       if (stat.modified.toUtc().isBefore(cutoff)) {
-        await entity.delete();
+        await _closeSink(entity.path);
+        try {
+          await entity.delete();
+        } catch (_) {
+          // A file rotated or removed between listing and deletion must not
+          // abort startup or background pruning.
+        }
       }
     }
   }
@@ -249,6 +276,7 @@ class ReadableLocalCopyWriter {
 
     final files = await _listReadableFiles(root);
     for (final entity in files) {
+      await _closeSink(entity.path);
       try {
         await entity.delete();
       } catch (_) {
@@ -258,9 +286,16 @@ class ReadableLocalCopyWriter {
     }
   }
 
-  Future<void> close() async {}
+  Future<void> close() async {
+    await flush();
+    for (final sink in _sinks.values) {
+      await sink.close();
+    }
+    _sinks.clear();
+  }
 
   Future<void> _rotateIfNeeded(File file, {required DateTime nowUtc}) async {
+    await flush();
     if (!await file.exists()) {
       return;
     }
@@ -270,6 +305,7 @@ class ReadableLocalCopyWriter {
       return;
     }
 
+    await _closeSink(file.path);
     final baseName = p.basenameWithoutExtension(file.path);
     final extension = p.extension(file.path);
     final rotatedPath = p.join(

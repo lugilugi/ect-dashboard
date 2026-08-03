@@ -33,8 +33,14 @@ TABLES="sessions laps telemetry_raw"
 echo "Exporting to $EXPORT_DIR (stamp $STAMP)"
 for t in $TABLES; do
   out="$EXPORT_DIR/${t}_${STAMP}.csv"
-  psql -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -U "$DB_USER" \
-    -c "\copy (SELECT * FROM $t) TO STDOUT WITH CSV HEADER" > "$out"
+  tmp="$out.tmp.$$"
+  if ! psql -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -U "$DB_USER" \
+    -c "\copy (SELECT * FROM $t) TO STDOUT WITH CSV HEADER" > "$tmp"; then
+    rm -f "$tmp"
+    echo "Export failed for $t; no partial file left behind." >&2
+    exit 1
+  fi
+  mv -f "$tmp" "$out"
   echo "wrote $out ($(wc -c < "$out") bytes)"
 done
 echo "Done."

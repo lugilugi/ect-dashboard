@@ -425,8 +425,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   children: [
                     Consumer(
                       builder: (context, ref, _) {
-                        final state = ref.watch(dashboardStateProvider);
-                        return EfficiencyGrid(state: state, p: p);
+                        final state = ref.read(dashboardStateProvider);
+                        return ValueListenableBuilder<int>(
+                          valueListenable: state.uiFrame,
+                          builder: (context, _, _) {
+                            return EfficiencyGrid(state: state, p: p);
+                          },
+                        );
                       },
                     ),
                     ConfigView(p: p),
@@ -779,7 +784,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           if (state.spoolCapacityWarning && !isTight) ...[
                             const SizedBox(width: 6),
                             Text(
-                              'SPOOL ${state.spoolUsageText}',
+                              'SPOOL ${state.spoolUsageText} DROP-OLDEST',
                               style: TextStyle(
                                 color: p.red,
                                 fontSize: 10,

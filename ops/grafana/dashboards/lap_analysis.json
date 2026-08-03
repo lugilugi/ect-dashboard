@@ -64,6 +64,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "Speed Overlay By Lap (Normalized)",
       "type": "timeseries"
     },
@@ -109,6 +111,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "Selected Lap Speed Trace",
       "type": "timeseries"
     },
@@ -369,7 +373,7 @@
       "type": "table"
     }
   ],
-  "refresh": "2s",
+  "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
   "tags": [

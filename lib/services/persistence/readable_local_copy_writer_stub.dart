@@ -43,6 +43,8 @@ class ReadableLocalCopyWriter {
     return null;
   }
 
+  Future<void> flush() async {}
+
   Future<ReadableLocalCopyPreview> readPreview({
     int maxFiles = 6,
     int maxLinesPerFile = 8,

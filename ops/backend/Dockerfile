@@ -2,7 +2,8 @@
 # ECT Dashboard - Single-container telemetry backend
 #
 # TimescaleDB (PostgreSQL) + Mosquitto (MQTT broker) + Telegraf (ingest)
-# + Grafana (dashboards) in ONE image, orchestrated by supervisord.
+# + CSV streamer/file server + Grafana (dashboards) in ONE image,
+# orchestrated by supervisord.
 #
 # Base: postgres:16-bookworm (Debian) + TimescaleDB from the official
 # Timescale Debian repo. Mosquitto comes from Debian, Telegraf from the
@@ -32,6 +33,8 @@ RUN apt-get update \
        gnupg \
        supervisor \
        mosquitto \
+       mosquitto-clients \
+       python3-paho-mqtt \
     && curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey \
         | gpg --dearmor -o /usr/share/keyrings/timescale.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/timescale.gpg] https://packagecloud.io/timescale/timescaledb/debian/ bookworm main" \
@@ -76,6 +79,7 @@ COPY ops/backend/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY ops/backend/telegraf.conf /etc/telegraf/telegraf.conf
 COPY ops/backend/export_to_csv.sh /usr/local/bin/export_to_csv.sh
 COPY ops/backend/csv_server.py /usr/local/bin/csv_server.py
+COPY ops/backend/csv_streamer.py /usr/local/bin/csv_streamer.py
 COPY db/schema.sql /docker-entrypoint-initdb.d/01_schema.sql
 # Provisioning goes in a dedicated dir (not /etc/grafana/provisioning, which
 # the package seeds with sample files) and is selected via GF_PATHS_PROVISIONING.
@@ -83,6 +87,9 @@ COPY ops/grafana/provisioning /etc/grafana/provisioning-ect
 COPY ops/grafana/dashboards /var/lib/grafana/dashboards
 
 RUN chmod +x /usr/local/bin/export_to_csv.sh \
+    && mkdir -p /var/lib/ect-backend/exports /var/lib/mosquitto \
+    && chown telegraf:telegraf /var/lib/ect-backend/exports \
+    && chown mosquitto:mosquitto /var/lib/mosquitto \
     && chown -R grafana:grafana /var/lib/grafana/dashboards /etc/grafana/provisioning-ect
 
 # --- default configuration (override any of these with `-e`) -------------------
@@ -116,7 +123,9 @@ VOLUME ["/var/lib/postgresql/data", "/var/lib/ect-backend/exports"]
 
 EXPOSE 1883 5432 3000 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
-  CMD pg_isready -U postgres -d telemetry || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
+  CMD pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" \
+      && mosquitto_pub -h 127.0.0.1 -p 1883 -t ect/healthcheck -m ok -q 1 -W 3 >/dev/null 2>&1 \
+      || exit 1
 
 CMD ["/usr/bin/supervisord", "-n"]

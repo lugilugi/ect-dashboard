@@ -12,14 +12,20 @@ In-cabin telemetry dashboard for ECT Shell Eco-marathon workflows.
 - MQTT export to `telemetry/eco_archers/events`.
 - Local spool and crash-recovery checkpointing.
 - Readable local CSV mirror for decoded telemetry by session.
+- Server-side continuous MQTT → CSV logging with 1-second fsync.
 
 ## Local Storage
 
 - Spool DB: `edge_spool.db` managed by `LocalSpoolService`.
-- Readable mirror: per-session CSV files in `readable_local_copy/session_csv` under the app database directory.
+- Readable mirror: per-session CSV files in `session_csv` under the app database directory.
 - CSV naming:
 	- `session_<normalized_session_id>.csv`
 - Retention: readable mirror retention days are configurable in Service mode (default 7 days) and pruned at MQTT service startup.
+- Durability: mirror writes are buffered and flushed every second, so a sudden
+  power loss costs at most ~1s of rows instead of losing buffered data.
+- MQTT spool: up to 50,000 pending batches are kept on disk and replayed when
+  the broker returns; if that cap is hit, the oldest batches are dropped and
+  the driver display shows `SPOOL … DROP-OLDEST`.
 - Service tools: Config page includes readable mirror preview and export actions.
 
 ## Planning and Contracts
@@ -60,12 +66,14 @@ uses to allow an update.
 - [ops/backend/supervisord.conf](ops/backend/supervisord.conf)
 - [ops/backend/mosquitto.conf](ops/backend/mosquitto.conf)
 - [ops/backend/telegraf.conf](ops/backend/telegraf.conf)
+- [ops/backend/csv_streamer.py](ops/backend/csv_streamer.py) — continuous MQTT → CSV logger (1s fsync, no retention)
 
 ### One-Command Multi-Container Local Stack (Compose)
 
 - [ops/local-stack/docker-compose.yml](ops/local-stack/docker-compose.yml)
 - [ops/local-stack/.env.example](ops/local-stack/.env.example)
 - [ops/local-stack/telegraf/Dockerfile](ops/local-stack/telegraf/Dockerfile)
+- [ops/backend/Dockerfile.csv-streamer](ops/backend/Dockerfile.csv-streamer) — minimal compose image for the CSV streamer
 
 ### CAN Signal Registry (app side)
 
@@ -85,7 +93,7 @@ Compose stack — both are fully documented in [BACKEND_GUIDE.md](BACKEND_GUIDE.
 ```bash
 # Option A: one container, everything inside
 docker build -t ect-backend -f ops/backend/Dockerfile .
-docker run -d --name ect-backend -p 1883:1883 -p 5432:5432 -p 3000:3000 ect-backend
+docker run -d --name ect-backend -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 ect-backend
 
 # Option B: separate containers per service
 cd ops/local-stack && docker compose up --build -d

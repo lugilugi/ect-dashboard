@@ -16,14 +16,25 @@ abstract class MqttTransport {
   void disconnect();
   bool get isConnected;
 
-  bool publish({required String topic, required String payloadJson});
+  Future<bool> publish({required String topic, required String payloadJson});
 
   set onConnected(void Function()? callback);
   set onDisconnected(void Function()? callback);
 }
 
+/// Exposes [MqttClient.publishingManager] (protected) so the transport can
+/// wait for QoS1 publish acknowledgements before handing a payload off.
+class _AckAwareMqttServerClient extends MqttServerClient {
+  _AckAwareMqttServerClient(super.host, super.clientId);
+
+  PublishingManager? get publishingManagerForAcks => publishingManager;
+}
+
 class MqttServerClientTransport implements MqttTransport {
-  final MqttServerClient _client;
+  final _AckAwareMqttServerClient _client;
+  final Duration ackTimeout;
+  final Map<int, Completer<bool>> _pendingAcks = <int, Completer<bool>>{};
+  StreamSubscription<MqttPublishMessage>? _ackSubscription;
   void Function()? _onConnected;
   void Function()? _onDisconnected;
 
@@ -33,7 +44,8 @@ class MqttServerClientTransport implements MqttTransport {
     int port = 1883,
     int keepAliveSeconds = 20,
     bool autoReconnect = true,
-  }) : _client = MqttServerClient(host, clientId) {
+    this.ackTimeout = const Duration(seconds: 5),
+  }) : _client = _AckAwareMqttServerClient(host, clientId) {
     _client.port = port;
     _client.logging(on: false);
     _client.keepAlivePeriod = keepAliveSeconds;
@@ -42,8 +54,20 @@ class MqttServerClientTransport implements MqttTransport {
       _onConnected?.call();
     };
     _client.onDisconnected = () {
+      _ackSubscription?.cancel();
+      _ackSubscription = null;
+      _failPendingAcks();
       _onDisconnected?.call();
     };
+  }
+
+  void _failPendingAcks() {
+    for (final completer in _pendingAcks.values) {
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
+    }
+    _pendingAcks.clear();
   }
 
   @override
@@ -63,6 +87,9 @@ class MqttServerClientTransport implements MqttTransport {
 
   @override
   void disconnect() {
+    _ackSubscription?.cancel();
+    _ackSubscription = null;
+    _failPendingAcks();
     _client.disconnect();
   }
 
@@ -72,12 +99,39 @@ class MqttServerClientTransport implements MqttTransport {
   }
 
   @override
-  bool publish({required String topic, required String payloadJson}) {
+  Future<bool> publish({required String topic, required String payloadJson}) async {
+    if (!isConnected) {
+      return false;
+    }
     try {
       final builder = MqttClientPayloadBuilder();
       builder.addString(payloadJson);
-      _client.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
-      return true;
+      final id = _client.publishMessage(
+        topic,
+        MqttQos.atLeastOnce,
+        builder.payload!,
+      );
+      if (id <= 0) {
+        return false;
+      }
+
+      final completer = Completer<bool>();
+      _pendingAcks[id] = completer;
+      _ackSubscription ??= _client.publishingManagerForAcks?.published.stream
+          .listen((msg) {
+            final ackId = msg.variableHeader?.messageIdentifier;
+            if (ackId == null) {
+              return;
+            }
+            final pending = _pendingAcks.remove(ackId);
+            if (pending != null && !pending.isCompleted) {
+              pending.complete(true);
+            }
+          });
+      final timer = Timer(ackTimeout, () {
+        _pendingAcks.remove(id)?.complete(false);
+      });
+      return await completer.future.whenComplete(timer.cancel);
     } catch (_) {
       return false;
     }
@@ -116,6 +170,7 @@ class MqttService {
   final Map<String, double> _lastPublishedValues = {};
   Timer? _flushTimer;
   Timer? _reconnectTimer;
+  Timer? _heartbeatTimer;
   bool _connecting = false;
   bool _isFlushingCanonicalBuffer = false;
 
@@ -126,10 +181,12 @@ class MqttService {
   int? _lastSentLapsCompleted;
   int? _lastSentCrossingDeadzoneMs;
 
-  static const int maxPendingPublishes = 2000;
+  static const int maxPendingPublishes = 50000;
+  static const int minBatchEvents = 8;
   static const int maxBatchEvents = 32;
   static const int maxBatchPayloadBytes = 32 * 1024;
-  static const Duration canonicalFlushInterval = Duration(milliseconds: 200);
+  static const int maxCanonicalBufferEvents = 256;
+  static const Duration canonicalFlushInterval = Duration(milliseconds: 50);
 
   static const String canonicalTopic = 'telemetry/eco_archers/events';
 
@@ -289,6 +346,7 @@ class MqttService {
     );
     await _hydratePendingPublishesFromSpool();
     _startFlushTimer();
+    _startHeartbeatTimer();
 
     unawaited(_connectOnce());
     _reconnectTimer?.cancel();
@@ -329,11 +387,20 @@ class MqttService {
     }
   }
 
-  void stop() {
+  Future<void> stop() async {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     state.removeListener(publishSessionMetadata);
-    unawaited(_flushCanonicalEventBuffer(drainAll: true));
+    // Wait out any flush already in progress, then drain synchronously before
+    // disconnecting so the final batch is published or durably spooled.
+    var waitTicks = 0;
+    while (_isFlushingCanonicalBuffer && waitTicks < 200) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      waitTicks += 1;
+    }
+    await _flushCanonicalEventBuffer(drainAll: true);
     _flushTimer?.cancel();
     _flushTimer = null;
     _transport.disconnect();
@@ -450,6 +517,30 @@ class MqttService {
     });
   }
 
+  void _startHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      publishHeartbeat();
+    });
+  }
+
+  /// Publishes every currently-known signal once per second, changed or not,
+  /// so steady-state values stay live in Grafana and the local CSV mirror has
+  /// reliable post-race intervals.
+  void publishHeartbeat() {
+    if (!state.isLogging || _lastPublishedValues.isEmpty) {
+      return;
+    }
+    for (final entry in _lastPublishedValues.entries) {
+      _publishMetric(
+        entry.key,
+        entry.value,
+        requireLogging: true,
+        force: true,
+      );
+    }
+  }
+
   Future<bool> _publishOrQueue({
     required String topic,
     required String payloadJson,
@@ -460,7 +551,7 @@ class MqttService {
     try {
       if (_isConnected) {
         await _flushPendingPublishes();
-        if (_publishDirect(topic: topic, payloadJson: payloadJson)) {
+        if (await _publishDirect(topic: topic, payloadJson: payloadJson)) {
           return true;
         }
       }
@@ -479,9 +570,15 @@ class MqttService {
     }
   }
 
-  bool _publishDirect({required String topic, required String payloadJson}) {
+  Future<bool> _publishDirect({
+    required String topic,
+    required String payloadJson,
+  }) async {
     try {
-      final sent = _transport.publish(topic: topic, payloadJson: payloadJson);
+      final sent = await _transport.publish(
+        topic: topic,
+        payloadJson: payloadJson,
+      );
       if (!sent) {
         debugPrint('MQTT publish failed, buffering payload.');
       }
@@ -550,7 +647,7 @@ class MqttService {
 
     while (_pendingPublishes.isNotEmpty && _isConnected) {
       final pending = _pendingPublishes.first;
-      final sent = _publishDirect(
+      final sent = await _publishDirect(
         topic: pending.topic,
         payloadJson: pending.payloadJson,
       );
@@ -826,13 +923,14 @@ class MqttService {
     String source = 'can',
     String? unit,
     int? canId,
+    bool force = false,
   }) {
     if (requireLogging && !state.isLogging) {
       return;
     }
 
     // Sparse Payload Optimization: Only buffer if the value has changed
-    if (_lastPublishedValues[metricName] == value) {
+    if (!force && _lastPublishedValues[metricName] == value) {
       return;
     }
     _lastPublishedValues[metricName] = value;
@@ -855,10 +953,17 @@ class MqttService {
     );
 
     _canonicalEventBuffer.addLast(event);
+    if (_canonicalEventBuffer.length > maxCanonicalBufferEvents) {
+      final dropped = _canonicalEventBuffer.removeFirst();
+      debugPrint(
+        'MQTT canonical buffer overflow; dropped seq ${dropped.seqInSession} '
+        '(local CSV/spool log still retain it).',
+      );
+    }
     _syncBacklogState();
 
-    if (_canonicalEventBuffer.length >= maxBatchEvents) {
-      unawaited(_flushCanonicalEventBuffer(drainAll: true));
+    if (_canonicalEventBuffer.length >= minBatchEvents) {
+      unawaited(_flushCanonicalEventBuffer());
     }
   }
 }

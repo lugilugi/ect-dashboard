@@ -13,13 +13,15 @@ Flutter app over MQTT and stores it in a time-series database for dashboards:
 ```
 [Flutter App (USB/CAN)] --MQTT sparse JSON--> [Mosquitto (broker)]
                                                         |
-                                          (Telegraf subscribes)
-                                                        v
-                              [TimescaleDB (PostgreSQL)] <-- (Telegraf inserts)
-                                        |
-                          (Grafana queries)
-                                        v
-                              [Dashboards]
+                          +-----------------------------+-----------------------------+
+                          |                                                           |
+              (Telegraf subscribes)                                  (csv-streamer subscribes)
+                          v                                                           v
+        [TimescaleDB (PostgreSQL)] <-- (Telegraf inserts)          [Per-session CSV files]
+                          |                                                           |
+              (Grafana queries)                                      (csv-server serves :8080)
+                          v
+              [Dashboards]
 ```
 
 | Component      | Port  | Role                                                        |
@@ -28,6 +30,7 @@ Flutter app over MQTT and stores it in a time-series database for dashboards:
 | **Telegraf**   | –     | Subscribes to MQTT, parses JSON, unpivots to EAV rows, inserts into TimescaleDB. |
 | **TimescaleDB**| 5432  | Time-series PostgreSQL; one row per signal sample.          |
 | **Grafana**    | 3000  | Dashboards and lap analysis.                                |
+| **csv-streamer / csv-server** | 8080 | csv-streamer appends every MQTT batch to per-session CSVs (1s fsync); csv-server serves those files read-only over HTTP. |
 
 The database schema is **shape-agnostic** (narrow EAV rows: `signal_name` /
 `value`), so new CAN signals flow into the backend **with zero schema
@@ -62,7 +65,7 @@ Run it — override anything with `-e`:
 
 ```bash
 docker run -d --name ect-backend \
-  -p 1883:1883 -p 5432:5432 -p 3000:3000 \
+  -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 \
   -e POSTGRES_PASSWORD=your_db_password \
   -e GRAFANA_ADMIN_PASSWORD=your_grafana_password \
   ect-backend
@@ -72,7 +75,7 @@ That's it. On first boot the container initializes the database and applies
 [db/schema.sql](db/schema.sql) automatically. Check readiness:
 
 ```bash
-docker logs -f ect-backend          # watch supervisord start all 4 services
+docker logs -f ect-backend          # watch supervisord start all 6 services
 docker exec ect-backend supervisorctl status
 ```
 
@@ -81,6 +84,7 @@ docker exec ect-backend supervisorctl status
 | MQTT      | `mqtt://<host>:1883`                                |
 | TimescaleDB | `postgresql://postgres:<password>@<host>:5432/telemetry` |
 | Grafana   | `http://<host>:3000` — log in with `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` |
+| CSV files | `http://<host>:8080/` — continuous streamer CSVs + snapshot exports |
 
 The app's MQTT settings (host/port, topics) are configured in **Service
 mode → Config → MQTT**.
@@ -122,6 +126,8 @@ them through [`.env`](ops/local-stack/.env.example). Override with
 | `TS_DB` / `TS_USER` / `TS_PASSWORD` | `telemetry` / `postgres` / `postgres` | Telegraf database credentials. |
 | `TS_DATASOURCE_URL`     | `localhost:5432` (single) / `timescaledb:5432` (Compose) | Grafana datasource URL. |
 | `TS_DATASOURCE_USER/DB/PASSWORD` | `postgres` / `telemetry` / `postgres` | Grafana datasource credentials. |
+| `EXPORT_DIR`            | `/var/lib/ect-backend/exports` (single) / `/exports` (Compose) | Where csv-streamer and snapshot exports write CSV files. |
+| `CSV_SERVER_PORT`       | `8080`                          | Read-only HTTP download port for the CSV files. |
 | `TS_PORT` / `MQTT_PORT` / `GRAFANA_PORT` (Compose) | `5432` / `1883` / `3000` | **Host** port bindings. |
 
 **App side:** set the same broker host/port in the app (Service → Config →
@@ -145,7 +151,12 @@ namespace their own deployment (e.g. `telemetry/my_team/events`).
 
 ### Events payload (sparse batch)
 
-The app batches only *changed* values into one JSON object per publish:
+The app publishes one sparse JSON object per batch. Batches are flushed as
+soon as 8 events are buffered or 50 ms have elapsed (whichever comes first,
+capped at 32 events / 32 KB). In addition, once per second the app sends a
+full-state heartbeat with every currently-known signal value — changed or
+not — so steady-state values stay live in Grafana and CSV logs keep a fixed
+1 Hz cadence:
 
 ```json
 {
@@ -276,7 +287,7 @@ schema changes.
 ### Core Tables
 
 1. **`sessions`**: Metadata for active runs (UUID `uid`, `session_name`,
-   `created_at`, `vehicle_setup` JSONB).
+   `created_at`, `updated_at`, `vehicle_setup` JSONB).
 2. **`laps`**: Lap sequence numbers and boundaries (`lap_number`,
    `started_at`, `ended_at`). Linked to `sessions(uid)` via FK.
 3. **`telemetry_raw`** (Hypertable): The narrow time-series sink — one row
@@ -305,12 +316,21 @@ schema changes.
 > only casts needed are for ordering/arithmetic (`lap_number::int`,
 > `ts_session_ms::bigint`), which run on already-filtered result sets.
 
+**Indexes & lifecycle:** `telemetry_raw` ships with
+`idx_telemetry_lookup (session_uid, signal_name, time DESC)` (live overview)
+and `idx_telemetry_lap_lookup (session_uid, lap_number, signal_name, time
+DESC)` (lap analysis). Chunks are compressed after 2 hours. There are **no
+retention policies** — all telemetry is kept indefinitely, so size the disk
+for full race history.
+
 ### Writable View
 
 **`sessions_ingest_view`** exposes `uid` (TEXT — the plugin writes it as a
 string), `session_name`, `vehicle_setup`, `time`. An `INSTEAD OF INSERT`
 trigger casts `uid` back to `UUID` and upserts into `sessions` on `uid`, so
-Telegraf can publish session metadata idempotently.
+Telegraf can publish session metadata idempotently. The upsert preserves any
+existing `vehicle_setup` (never overwritten with NULL) and bumps
+`updated_at`.
 
 > `vehicle_setup` (JSONB) is deliberately **not** ingested through this
 > pipeline: Telegraf `json_v2` cannot stringify a nested JSON object into a
@@ -340,7 +360,8 @@ Everything healthy? From inside the container:
 
 ```bash
 docker exec ect-backend supervisorctl status
-# postgres  RUNNING ...  mosquitto RUNNING ...  telegraf RUNNING ...  grafana RUNNING
+# postgres RUNNING ... mosquitto RUNNING ... telegraf RUNNING ...
+# csv-server RUNNING ... csv-streamer RUNNING ... grafana RUNNING
 ```
 
 Watch live rows as the app logs:
@@ -357,7 +378,9 @@ Or run the bundled verification script against any TimescaleDB:
 psql "$TS_DSN" -f db/scripts/verify_setup.sql
 ```
 
-A quick end-to-end smoke test with a raw MQTT publish (requires `mosquitto_pub`):
+A quick end-to-end smoke test with a raw MQTT publish (requires
+`mosquitto_pub` — install `mosquitto-clients` on the host if missing; the
+single-container image includes it):
 
 ```bash
 mosquitto_pub -h localhost -t telemetry/eco_archers/events -m \
@@ -388,12 +411,26 @@ database utilities (like `psql`) installed on your host.
   ./db/scripts/export_to_csv.sh
   ```
 
+### Continuous streamer (automatic, both deployments)
+
+The backend also logs **continuously**: the `csv-streamer` service subscribes
+to `TOPIC_EVENTS` / `TOPIC_SESSIONS` and appends every signal to
+`events_<session_uid>.csv` (plus a `sessions.csv`) in `EXPORT_DIR`. Rows are
+fsynced once per second, so a sudden kill loses at most ~1s of rows, and QoS1
+duplicates are suppressed. Files are never deleted — no retention.
+
+- **Single container**: runs automatically under supervisord; files land in
+  `/var/lib/ect-backend/exports` and are served at `http://<host>:8080/`.
+- **Compose stack**: the `csv-streamer` service writes into the host
+  `./csv_exports/` bind mount.
+
 ### Server-side (saved on the backend itself)
 
 The backend also keeps its own exports, written **inside the server**, so
 they survive without a host connection. Each run writes timestamped files
 (`sessions_<stamp>.csv`, `laps_<stamp>.csv`, `telemetry_raw_<stamp>.csv`),
-preserving history across runs.
+preserving history across runs. Writes are atomic (temp file + rename), so a
+failed export never leaves a partial file behind.
 
 - **Single container**: run the built-in script, then browse/download the
   files at `http://<backend-host>:8080/` (read-only HTTP file server on the
@@ -501,6 +538,17 @@ ORDER BY lap_number::int, ts_session_ms::bigint;
 > (see [Section 7](#7-database-schema-overview)), so always cast them for
 > arithmetic or ordering: `lap_number::int`, `ts_session_ms::bigint`.
 
+### Rule 4: Keep Live Refresh Cheap
+
+The provisioned dashboards use a **2s refresh** on the live overview and
+**5s** on the lap-analysis view (which runs heavier window functions).
+Time-series panels set `maxDataPoints: 1000` and `interval: "2s"` so
+`$__interval` never drops below the ingest cadence. The
+`idx_telemetry_lap_lookup` index covers lap-filtered queries, and the
+`grafana_reader` role has `statement_timeout = '30s'` so a runaway query
+cannot stall the host. Keep panel intervals at or above the 1s Telegraf
+flush — anything faster just repeats work.
+
 ---
 
 ## 11. Troubleshooting
@@ -514,7 +562,11 @@ ORDER BY lap_number::int, ts_session_ms::bigint;
 | Sessions messages don't reach the `sessions` table | `uid` in `sessions_ingest_view` must be TEXT (cast to `uuid` in the trigger). Also ensure `vehicle_setup` is NOT in `included_keys` — a nested object makes `json_v2` emit zero metrics. |
 | Grafana shows datasource error              | `TS_DATASOURCE_URL/PASSWORD` wrong for the deployment type (single: `localhost:5432`, Compose: `timescaledb:5432`). |
 | Grafana loads no dashboards / no datasource | Grafana ≥13 defaults the provisioning path to `/usr/share/grafana/conf/provisioning` — the single container sets `GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect`. Also: provisioning env vars use Go `os.ExpandEnv` semantics — plain `${VAR}` only, the `:-default` syntax expands to an **empty string** (silently broken datasource). |
-| Schema not applied on an existing container | `/docker-entrypoint-initdb.d` runs only on an **empty** data volume — wipe it (`docker compose down -v` or `docker volume rm`). |
+| Schema not applied on an existing container | `/docker-entrypoint-initdb.d` runs only on an **empty** data volume — wipe it (`docker compose down -v` or `docker volume rm`). There are no migration files; `db/schema.sql` is the single fresh-install source. |
+| Container never becomes healthy             | The healthcheck runs `pg_isready` **and** `mosquitto_pub` (the image includes `mosquitto-clients`). Verify `POSTGRES_USER`/`POSTGRES_DB` are set and the broker is up (`docker exec ect-backend supervisorctl status`). |
+| `csv-streamer` is not writing CSVs          | Check `docker exec ect-backend supervisorctl status csv-streamer`; confirm `TOPIC_EVENTS`/`TOPIC_SESSIONS` match the app, and that `EXPORT_DIR` is writable by the `telegraf` user. |
+| App shows `SPOOL … DROP-OLDEST`             | Broker outage exceeded the 50,000-batch spool cap; the oldest batches are dropped by design (the vehicle's local CSV mirror still has them). Bring the broker back to resume replay. |
+| `vehicle_setup` was being wiped on session upserts | Fixed in the renewed schema — the upsert now preserves it. Re-apply `db/schema.sql` on an empty volume. |
 | MQTT refused on non-local host              | Broker binds `0.0.0.0` — check host firewall/security group on port 1883. |
 
 ### Production hardening

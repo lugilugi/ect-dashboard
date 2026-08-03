@@ -1,0 +1,14 @@
+# Minimal image for the continuous MQTT -> CSV streamer in the compose stack.
+#
+# The mounted EXPORT_DIR (../../csv_exports on the host) must be writable by
+# uid 65534 (nobody). Docker Desktop bind mounts are writable by default; on
+# Linux hosts, chown the directory to 65534 if writes are denied.
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir paho-mqtt==1.6.1
+
+COPY csv_streamer.py /usr/local/bin/csv_streamer.py
+
+USER nobody
+
+CMD ["python3", "/usr/local/bin/csv_streamer.py"]

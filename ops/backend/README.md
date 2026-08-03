@@ -8,7 +8,7 @@ just build and run:
 # from the repository root (the whole repo is the build context)
 docker build -t ect-backend -f ops/backend/Dockerfile .
 docker run -d --name ect-backend \
-  -p 1883:1883 -p 5432:5432 -p 3000:3000 \
+  -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 \
   -e POSTGRES_PASSWORD=changeme \
   -e GRAFANA_ADMIN_PASSWORD=changeme \
   ect-backend
@@ -19,6 +19,8 @@ Then:
 - MQTT broker at `mqtt://<host>:1883` (topic `telemetry/eco_archers/events`)
 - Grafana at `http://<host>:3000` (admin / your password)
 - TimescaleDB at `postgres://<host>:5432/telemetry`
+- CSV downloads at `http://<host>:8080/` (continuous per-session streamer files
+  plus timestamped snapshot exports, all kept indefinitely)
 
 Everything is configurable with `-e` environment variables - see
 [BACKEND_GUIDE.md](../../BACKEND_GUIDE.md) for the full reference, the CAN
@@ -27,8 +29,10 @@ signal how-to, and troubleshooting.
 ## Files
 
 - `Dockerfile` - the whole stack in one image
-- `supervisord.conf` - runs postgres, mosquitto, telegraf, grafana
+- `Dockerfile.csv-streamer` - minimal image for the compose CSV streamer
+- `supervisord.conf` - runs postgres, mosquitto, telegraf, csv-server, csv-streamer, grafana
 - `mosquitto.conf` - broker config (anonymous, local dev)
 - `telegraf.conf` - MQTT -> TimescaleDB ingest (env-driven topics)
+- `csv_streamer.py` - continuous MQTT -> CSV logging (1s fsync, no retention)
 
 Prefer separate containers? Use `ops/local-stack/docker-compose.yml` instead.

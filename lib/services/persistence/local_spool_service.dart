@@ -301,13 +301,19 @@ class LocalSpoolService {
   bool _usingMemoryFallback = false;
   int _nextMemoryId = 1;
   int _nextMemoryDecodedEventId = 1;
+  Timer? _csvFlushTimer;
+  Timer? _decodedEventFlushTimer;
+  final List<Map<String, Object?>> _decodedEventBatch =
+      <Map<String, Object?>>[];
+  bool _flushingDecodedBatch = false;
+  static const int _decodedEventBatchThreshold = 100;
   final List<SpoolBatchRecord> _memoryRecords = <SpoolBatchRecord>[];
   final List<SpoolDecodedEventRecord> _memoryDecodedEvents =
       <SpoolDecodedEventRecord>[];
   String? _memorySessionCheckpointJson;
 
   LocalSpoolService({
-    this.maxPendingBatches = 2000,
+    this.maxPendingBatches = 50000,
     this.forceInMemory = false,
     this.readableCopyEnabled = true,
     this.readableCopyDirectoryPath,
@@ -421,6 +427,16 @@ class LocalSpoolService {
         overrideDirectoryPath: readableCopyDirectoryPath,
       );
     }
+
+    _csvFlushTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      unawaited(_readableCopyWriter.flush());
+    });
+    _decodedEventFlushTimer ??= Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) {
+        unawaited(_flushDecodedEventBatch());
+      },
+    );
   }
 
   void _ensureDesktopDatabaseFactory() {
@@ -541,12 +557,15 @@ class LocalSpoolService {
       return;
     }
 
-    await _db!.insert(_decodedEventsTable, <String, Object?>{
+    _decodedEventBatch.add(<String, Object?>{
       'session_id': sessionId,
       'seq_in_session': seqInSession,
       'event_json': eventJson,
       'enqueued_at_utc': enqueued.toIso8601String(),
-    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    });
+    if (_decodedEventBatch.length >= _decodedEventBatchThreshold) {
+      unawaited(_flushDecodedEventBatch());
+    }
     await _appendSessionCsvEvent(
       sessionId: sessionId,
       seqInSession: seqInSession,
@@ -562,6 +581,7 @@ class LocalSpoolService {
       return _memoryDecodedEvents.where((record) => record.isPending).length;
     }
 
+    await _flushDecodedEventBatch();
     final rows = await _db!.rawQuery(
       'SELECT COUNT(*) AS count FROM $_decodedEventsTable WHERE published_at_utc IS NULL',
     );
@@ -588,6 +608,7 @@ class LocalSpoolService {
       return maxSeq;
     }
 
+    await _flushDecodedEventBatch();
     final rows = await _db!.rawQuery(
       'SELECT MAX(seq_in_session) AS max_seq FROM $_decodedEventsTable WHERE session_id = ?',
       <Object?>[sessionId],
@@ -627,6 +648,7 @@ class LocalSpoolService {
       return;
     }
 
+    await _flushDecodedEventBatch();
     await _db!.rawUpdate(
       'UPDATE $_decodedEventsTable SET published_at_utc = ? WHERE session_id = ? AND seq_in_session BETWEEN ? AND ? AND published_at_utc IS NULL',
       <Object?>[
@@ -825,6 +847,7 @@ class LocalSpoolService {
       return;
     }
 
+    await _flushDecodedEventBatch();
     await _db!.delete(
       _decodedEventsTable,
       where: 'published_at_utc IS NOT NULL AND published_at_utc < ?',
@@ -864,6 +887,7 @@ class LocalSpoolService {
       _memoryDecodedEvents.clear();
       _nextMemoryDecodedEventId = 1;
     } else {
+      await _flushDecodedEventBatch();
       await _db!.delete(_decodedEventsTable);
     }
   }
@@ -921,6 +945,11 @@ class LocalSpoolService {
   }
 
   Future<void> close() async {
+    _csvFlushTimer?.cancel();
+    _csvFlushTimer = null;
+    _decodedEventFlushTimer?.cancel();
+    _decodedEventFlushTimer = null;
+    await _flushDecodedEventBatch();
     final db = _db;
     _db = null;
     if (db != null) {
@@ -930,6 +959,40 @@ class LocalSpoolService {
     spoolHealth.dispose();
     _initialized = false;
     _usingMemoryFallback = forceInMemory;
+  }
+
+  Future<void> _flushDecodedEventBatch() async {
+    if (_flushingDecodedBatch) {
+      var waitTicks = 0;
+      while (_flushingDecodedBatch && waitTicks < 100) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        waitTicks += 1;
+      }
+      if (_decodedEventBatch.isEmpty) {
+        return;
+      }
+    }
+    final db = _db;
+    if (db == null || _decodedEventBatch.isEmpty) {
+      return;
+    }
+
+    _flushingDecodedBatch = true;
+    try {
+      final rows = List<Map<String, Object?>>.from(_decodedEventBatch);
+      _decodedEventBatch.clear();
+      final batch = db.batch();
+      for (final row in rows) {
+        batch.insert(
+          _decodedEventsTable,
+          row,
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+      await batch.commit(noResult: true);
+    } finally {
+      _flushingDecodedBatch = false;
+    }
   }
 
   Future<void> _trimMemoryPendingToCap() async {

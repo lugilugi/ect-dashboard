@@ -67,6 +67,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "Session Speed Timeline",
       "type": "timeseries"
     },
@@ -288,6 +290,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "GPS Lock / Fallback State",
       "type": "timeseries"
     },
@@ -333,6 +337,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "GPS Satellite Count",
       "type": "timeseries"
     },
@@ -378,6 +384,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "GPS Speed / Accuracy",
       "type": "timeseries"
     },
@@ -423,6 +431,8 @@
           "refId": "A"
         }
       ],
+      "interval": "2s",
+      "maxDataPoints": 1000,
       "title": "Average Battery Voltage",
       "type": "timeseries"
     }

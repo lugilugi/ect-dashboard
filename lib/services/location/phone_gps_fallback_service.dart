@@ -11,7 +11,7 @@ import 'package:telemetry_dashboard/services/location/android_fused_location_ser
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
 
 class PhoneGpsFallbackService {
-  static const Duration _fallbackEmitInterval = Duration(milliseconds: 33);
+  static const Duration _fallbackEmitInterval = Duration(seconds: 1);
 
   final DashboardState state;
   final GpsSourceManager gpsSourceManager;

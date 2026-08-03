@@ -45,7 +45,10 @@ class _FakeMqttTransport implements MqttTransport {
   }
 
   @override
-  bool publish({required String topic, required String payloadJson}) {
+  Future<bool> publish({
+    required String topic,
+    required String payloadJson,
+  }) async {
     if (!_connected) {
       return false;
     }
@@ -386,7 +389,7 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 150));
         expect(transport.connectAttempts, attemptsAfterConnect);
 
-        service.stop();
+        await service.stop();
         state.dispose();
         await spool.close();
       },
@@ -419,7 +422,7 @@ void main() {
         expect(transport.isConnected, isTrue);
         expect(state.isServerConnected, isTrue);
 
-        service.stop();
+        await service.stop();
         state.dispose();
         await spool.close();
       },

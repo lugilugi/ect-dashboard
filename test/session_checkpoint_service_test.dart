@@ -40,7 +40,10 @@ class _FakeMqttTransport implements MqttTransport {
   }
 
   @override
-  bool publish({required String topic, required String payloadJson}) {
+  Future<bool> publish({
+    required String topic,
+    required String payloadJson,
+  }) async {
     return _connected;
   }
 }

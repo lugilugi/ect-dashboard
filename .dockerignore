@@ -8,6 +8,9 @@ build/
 .metadata
 telemetry_dashboard.iml
 
+# Local telemetry exports (never part of the Docker build context)
+csv_exports/
+
 # VCS / IDE
 .git/
 .idea/
