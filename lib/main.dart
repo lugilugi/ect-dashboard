@@ -135,7 +135,7 @@ class _TelemetryAppState extends ConsumerState<TelemetryApp> {
 
     // USB ingest is handled entirely by UsbService inside the coordinator:
     // Android uses usb_serial, and desktops fall back to the serial port
-    // (default COM3, override with
+    // (auto-detected; pin a port with
     // --dart-define=DESKTOP_SERIAL_PORT=COM5). See usb_service.dart.
 
     WidgetsBinding.instance.addPostFrameCallback((_) {

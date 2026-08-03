@@ -8,6 +8,8 @@ import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
 import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
 import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
+import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
+import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 import 'package:telemetry_dashboard/services/orchestration/session_orchestrator.dart';
 import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
 import 'package:telemetry_dashboard/services/persistence/readable_local_copy_writer.dart';
@@ -181,6 +183,8 @@ class DashboardState extends ChangeNotifier {
   final SessionControlStore _sessionControl = SessionControlStore();
   SpoolHealthStore _spoolHealth = SpoolHealthStore();
   bool _ownsSpoolHealth = true;
+  UsbDebugLogStore _usbDebugLog = UsbDebugLogStore();
+  bool _ownsUsbDebugLog = true;
   final AlertStateStore _alerts = AlertStateStore();
   final ReadableCopyStateStore _readableCopy = ReadableCopyStateStore();
   final ConfigStateStore _config = ConfigStateStore();
@@ -208,6 +212,24 @@ class DashboardState extends ChangeNotifier {
     _spoolHealth = store;
     _ownsSpoolHealth = false;
     _spoolHealth.addListener(_handleSpoolHealthChanged);
+    notifyListeners();
+  }
+
+  UsbDebugLogStore get usbDebugLog => _usbDebugLog;
+
+  void attachUsbDebugLogStore(UsbDebugLogStore store) {
+    if (identical(_usbDebugLog, store)) {
+      return;
+    }
+
+    _usbDebugLog.removeListener(_handleUsbDebugLogChanged);
+    if (_ownsUsbDebugLog) {
+      _usbDebugLog.dispose();
+    }
+
+    _usbDebugLog = store;
+    _ownsUsbDebugLog = false;
+    _usbDebugLog.addListener(_handleUsbDebugLogChanged);
     notifyListeners();
   }
 
@@ -477,6 +499,31 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
+  int _mqttPort = 1883;
+  int get mqttPort => _mqttPort;
+
+  void updateMqttPort(int value) {
+    final bounded = value.clamp(1, 65535);
+    if (_mqttPort == bounded) return;
+    _mqttPort = bounded;
+    notifyListeners();
+  }
+
+  // User-pinned USB ingest port (empty = auto-detect). On Android the id is
+  // the usb_serial deviceName; on desktop it is the serial port name.
+  String _usbPortSelection = "";
+  String get usbPortSelection => _usbPortSelection;
+
+  Future<List<UsbPortOption>> Function()? onRequestUsbPortOptions;
+  void Function(String portId)? onUsbPortSelectionChanged;
+
+  void updateUsbPortSelection(String value) {
+    if (_usbPortSelection == value) return;
+    _usbPortSelection = value;
+    notifyListeners();
+    onUsbPortSelectionChanged?.call(value);
+  }
+
   // GENERATE NAME (e.g., RUN_20260327_1430)
   String generateDefaultName() {
     final now = DateTime.now();
@@ -620,6 +667,10 @@ class DashboardState extends ChangeNotifier {
   }
 
   void _handleSpoolHealthChanged() {
+    notifyListeners();
+  }
+
+  void _handleUsbDebugLogChanged() {
     notifyListeners();
   }
 
@@ -1154,6 +1205,10 @@ class DashboardState extends ChangeNotifier {
     _spoolHealth.removeListener(_handleSpoolHealthChanged);
     if (_ownsSpoolHealth) {
       _spoolHealth.dispose();
+    }
+    _usbDebugLog.removeListener(_handleUsbDebugLogChanged);
+    if (_ownsUsbDebugLog) {
+      _usbDebugLog.dispose();
     }
     super.dispose();
   }

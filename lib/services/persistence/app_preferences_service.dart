@@ -8,6 +8,8 @@ import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 
 class AppPreferencesService {
   static const String _kMqttHost = 'prefs.mqtt_host';
+  static const String _kMqttPort = 'prefs.mqtt_port';
+  static const String _kUsbPortSelection = 'prefs.usb_port_selection';
   static const String _kUseLightTheme = 'prefs.use_light_theme';
   static const String _kUseDictionaryAuxDispatch =
       'prefs.use_dictionary_aux_dispatch';
@@ -36,6 +38,8 @@ class AppPreferencesService {
   String buildStateSignature(DashboardState state) {
     return <Object?>[
       state.mqttHost,
+      state.mqttPort,
+      state.usbPortSelection,
       state.useLightTheme,
       state.useDictionaryAuxDispatch,
       state.crossingDeadzoneMs,
@@ -61,6 +65,16 @@ class AppPreferencesService {
     final host = prefs.getString(_kMqttHost);
     if (host != null && host.isNotEmpty) {
       state.updateMqttHost(host);
+    }
+
+    final mqttPort = prefs.getInt(_kMqttPort);
+    if (mqttPort != null) {
+      state.updateMqttPort(mqttPort);
+    }
+
+    final usbPortSelection = prefs.getString(_kUsbPortSelection);
+    if (usbPortSelection != null && usbPortSelection.isNotEmpty) {
+      state.updateUsbPortSelection(usbPortSelection);
     }
 
     final useLightTheme = prefs.getBool(_kUseLightTheme);
@@ -174,6 +188,8 @@ class AppPreferencesService {
     final prefs = await SharedPreferences.getInstance();
 
     await prefs.setString(_kMqttHost, state.mqttHost);
+    await prefs.setInt(_kMqttPort, state.mqttPort);
+    await prefs.setString(_kUsbPortSelection, state.usbPortSelection);
     await prefs.setBool(_kUseLightTheme, state.useLightTheme);
     await prefs.setBool(
       _kUseDictionaryAuxDispatch,

@@ -106,7 +106,11 @@ ENV POSTGRES_DB=telemetry \
     TS_DATASOURCE_PASSWORD=postgres \
     EXPORT_DIR=/var/lib/ect-backend/exports \
     CSV_SERVER_PORT=8080 \
-    GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect
+    GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect \
+    # Show dashboard times in the local timezone of the machine viewing
+    # them (browser) instead of UTC. The provisioned dashboards also set
+    # "timezone": "browser" individually.
+    GF_DASHBOARDS_DEFAULT_TIMEZONE=browser
 
 VOLUME ["/var/lib/postgresql/data", "/var/lib/ect-backend/exports"]
 

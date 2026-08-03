@@ -74,6 +74,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Machine-local timezone for dashboards (the machine viewing them).
+      GF_DASHBOARDS_DEFAULT_TIMEZONE: browser
       TS_DATASOURCE_URL: timescaledb:5432
       TS_DATASOURCE_USER: ${POSTGRES_USER:-postgres}
       TS_DATASOURCE_DB: ${POSTGRES_DB:-telemetry}

@@ -137,6 +137,7 @@ class MqttService {
   final String currentSessionId = const Uuid().v4();
 
   String? _currentConnectedHost;
+  int? _currentConnectedPort;
 
   MqttService(
     this.state, {
@@ -149,18 +150,20 @@ class MqttService {
            MqttServerClientTransport(
              host: state.mqttHost,
              clientId: 'eco_archers_car',
+             port: state.mqttPort,
            ) {
     if (transport == null) {
       _currentConnectedHost = state.mqttHost;
+      _currentConnectedPort = state.mqttPort;
     }
     _setupCallbacks();
   }
 
   void publishSessionMetadata() {
     if (_transport is MqttServerClientTransport &&
-        _currentConnectedHost != null &&
-        _currentConnectedHost != state.mqttHost) {
-      unawaited(_reconnectWithNewHost(state.mqttHost));
+        (_currentConnectedHost != state.mqttHost ||
+            _currentConnectedPort != state.mqttPort)) {
+      unawaited(_reconnectWithNewEndpoint());
     }
 
     final sessionId = state.sessionId;
@@ -235,28 +238,36 @@ class MqttService {
     _lastSentCrossingDeadzoneMs = crossingDeadzoneMs;
   }
 
-  Future<void> _reconnectWithNewHost(String newHost) async {
-    debugPrint('MQTT Host changed from $_currentConnectedHost to $newHost. Reconnecting...');
+  Future<void> _reconnectWithNewEndpoint() async {
+    final newHost = state.mqttHost;
+    final newPort = state.mqttPort;
+    debugPrint(
+      'MQTT endpoint changed from '
+      '$_currentConnectedHost:$_currentConnectedPort '
+      'to $newHost:$newPort. Reconnecting...',
+    );
     _currentConnectedHost = newHost;
+    _currentConnectedPort = newPort;
     _flushTimer?.cancel();
     _flushTimer = null;
     _transport.disconnect();
     _transport = MqttServerClientTransport(
       host: newHost,
       clientId: 'eco_archers_car',
+      port: newPort,
     );
     _setupCallbacks();
     _startFlushTimer();
     try {
       await _transport.connect();
       if (_transport.isConnected) {
-        debugPrint('MQTT Connected to $newHost!');
+        debugPrint('MQTT Connected to $newHost:$newPort!');
         state.setServerConnectionState(true);
         await _flushPendingPublishes();
         await _flushCanonicalEventBuffer(drainAll: true);
       }
     } catch (e) {
-      debugPrint('MQTT Connection to $newHost failed: $e');
+      debugPrint('MQTT Connection to $newHost:$newPort failed: $e');
       _transport.disconnect();
       state.setServerConnectionState(false);
     }

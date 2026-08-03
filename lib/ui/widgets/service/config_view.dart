@@ -11,6 +11,8 @@ import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
 import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
+import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
+import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 enum ConfigSection {
   connectivity,
   canDictionary,
@@ -41,13 +43,25 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
   LatLng? _draftGeofenceEnd;
   bool _dismissGpsWaitingOverlay = false;
   bool _hasCenteredOnGps = false;
+  List<UsbPortOption> _usbPortOptions = const [];
+  bool _usbPortsLoading = false;
+  bool _usbPortsLoaded = false;
+  TextEditingController? _mqttHostController;
+  TextEditingController? _mqttPortController;
 
   DashboardState get state => ref.read(dashboardStateProvider);
   Palette get p => widget.p;
 
+  TextEditingController get _hostController =>
+      _mqttHostController ??= TextEditingController(text: state.mqttHost);
+  TextEditingController get _portController =>
+      _mqttPortController ??= TextEditingController(text: state.mqttPort.toString());
+
   @override
   void dispose() {
     _canSearchController.dispose();
+    _mqttHostController?.dispose();
+    _mqttPortController?.dispose();
     super.dispose();
   }
 
@@ -243,11 +257,309 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
             ),
           ),
           const SizedBox(height: 10),
+          _buildUsbSelectCard(),
+          const SizedBox(height: 10),
+          _buildMqttEndpointCard(),
+          const SizedBox(height: 10),
+          _buildUsbDebugLogCard(),
+          const SizedBox(height: 10),
           _buildCmdBtn('RESET CAN LOGS', () {
             setState(() {
               state.lastCanPayloads.clear();
             });
           }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUsbSelectCard() {
+    if (!_usbPortsLoaded && !_usbPortsLoading) {
+      _refreshUsbPortOptions();
+    }
+
+    final selected = state.usbPortSelection;
+    final selectedInList = _usbPortOptions.any((o) => o.id == selected);
+
+    return _settingsCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'USB PORT SELECT',
+                  style: TextStyle(
+                    color: p.cyan,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: _usbPortsLoading
+                    ? SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: p.cyan,
+                        ),
+                      )
+                    : Icon(Icons.refresh_rounded, color: p.dimText, size: 18),
+                tooltip: 'Refresh port list',
+                visualDensity: VisualDensity.compact,
+                onPressed: _usbPortsLoading ? null : _refreshUsbPortOptions,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          DropdownButtonFormField<String>(
+            initialValue: selectedInList ? selected : null,
+            isExpanded: true,
+            dropdownColor: p.light ? Colors.white : const Color(0xFF181818),
+            style: TextStyle(color: p.mainText, fontSize: 12),
+            decoration: InputDecoration(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 8,
+              ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+              isDense: true,
+            ),
+            items: [
+              const DropdownMenuItem<String>(
+                value: null,
+                child: Text('AUTO DETECT'),
+              ),
+              for (final option in _usbPortOptions)
+                DropdownMenuItem<String>(
+                  value: option.id,
+                  child: Text(option.label),
+                ),
+            ],
+            onChanged: (value) {
+              if (value == null && selected.isEmpty) {
+                return;
+              }
+              state.updateUsbPortSelection(value ?? '');
+            },
+          ),
+          const SizedBox(height: 6),
+          Text(
+            selected.isEmpty
+                ? 'Auto-detect: prefers native ESP32 USB, then WROOM bridges (CP210x/CH340/FTDI).'
+                : selectedInList
+                    ? 'Pinned to $selected. Unplug to fall back to auto-detect.'
+                    : 'Pinned to $selected (not currently present; using auto-detect).',
+            style: TextStyle(color: p.dimText, fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _refreshUsbPortOptions() async {
+    final fetcher = state.onRequestUsbPortOptions;
+    if (fetcher == null) {
+      return;
+    }
+    _usbPortsLoading = true;
+    try {
+      final options = await fetcher();
+      if (mounted) {
+        setState(() {
+          _usbPortOptions = options;
+          _usbPortsLoaded = true;
+          _usbPortsLoading = false;
+        });
+      }
+    } finally {
+      if (mounted && _usbPortsLoading) {
+        setState(() {
+          _usbPortsLoading = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildMqttEndpointCard() {
+    return _settingsCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'MQTT ENDPOINT',
+            style: TextStyle(
+              color: p.cyan,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _hostController,
+            style: TextStyle(color: p.mainText, fontSize: 12),
+            decoration: InputDecoration(
+              labelText: 'Broker host',
+              labelStyle: TextStyle(color: p.dimText, fontSize: 11),
+              prefixIcon: Icon(Icons.dns_rounded, color: p.dimText, size: 16),
+              isDense: true,
+            ),
+            onSubmitted: (_) => _applyMqttEndpoint(),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _portController,
+                  keyboardType: TextInputType.number,
+                  style: TextStyle(color: p.mainText, fontSize: 12),
+                  decoration: InputDecoration(
+                    labelText: 'Port',
+                    labelStyle: TextStyle(color: p.dimText, fontSize: 11),
+                    prefixIcon: Icon(Icons.numbers_rounded, color: p.dimText, size: 16),
+                    isDense: true,
+                  ),
+                  onSubmitted: (_) => _applyMqttEndpoint(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _buildCmdBtn(
+                'APPLY',
+                _applyMqttEndpoint,
+                compact: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Changes reconnect MQTT immediately. Published to '
+            'telemetry/eco_archers/events.',
+            style: TextStyle(color: p.dimText, fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _applyMqttEndpoint() {
+    final host = _hostController.text.trim();
+    final portText = _portController.text.trim();
+    final port = int.tryParse(portText);
+    if (host.isEmpty || port == null || port < 1 || port > 65535) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid MQTT endpoint (host + port 1-65535).')),
+      );
+      return;
+    }
+
+    state.updateMqttHost(host);
+    state.updateMqttPort(port);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('MQTT endpoint set to $host:$port. Reconnecting...')),
+    );
+  }
+
+  Widget _buildUsbDebugLogCard() {
+    final log = state.usbDebugLog;
+    final entries = log.entries;
+
+    return _settingsCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'USB DEBUG LOG (${entries.length})',
+                  style: TextStyle(
+                    color: p.cyan,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.clear_all_rounded, color: p.dimText, size: 18),
+                tooltip: 'Clear USB debug log',
+                visualDensity: VisualDensity.compact,
+                onPressed: entries.isEmpty ? null : log.clear,
+              ),
+            ],
+          ),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 220),
+            decoration: BoxDecoration(
+              border: Border.all(color: p.border),
+              color: p.light ? Colors.grey.shade100 : const Color(0xFF101010),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: entries.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        'No USB events logged yet.',
+                        style: TextStyle(color: p.dimText, fontSize: 11),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    reverse: true,
+                    padding: const EdgeInsets.all(6),
+                    itemCount: entries.length,
+                    itemBuilder: (context, index) {
+                      final entry = entries[entries.length - 1 - index];
+                      final color = switch (entry.level) {
+                        UsbDebugLevel.info => p.mainText,
+                        UsbDebugLevel.warn => p.amber,
+                        UsbDebugLevel.error => p.red,
+                      };
+                      final hh = entry.atUtc.toLocal().hour
+                          .toString()
+                          .padLeft(2, '0');
+                      final mm = entry.atUtc.toLocal().minute
+                          .toString()
+                          .padLeft(2, '0');
+                      final ss = entry.atUtc.toLocal().second
+                          .toString()
+                          .padLeft(2, '0');
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '$hh:$mm:$ss ',
+                                style: TextStyle(
+                                  color: p.dimText,
+                                  fontFamily: 'monospace',
+                                  fontSize: 9,
+                                ),
+                              ),
+                              TextSpan(
+                                text: entry.message,
+                                style: TextStyle(
+                                  color: color,
+                                  fontFamily: 'monospace',
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
     );
