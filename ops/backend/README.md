@@ -8,11 +8,15 @@ just build and run:
 # from the repository root (the whole repo is the build context)
 docker build -t ect-backend -f ops/backend/Dockerfile .
 docker run -d --name ect-backend \
+  --restart unless-stopped \
   -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 \
   -e POSTGRES_PASSWORD=changeme \
   -e GRAFANA_ADMIN_PASSWORD=changeme \
   ect-backend
 ```
+
+The container runs under tini (PID 1), pins Telegraf 1.31.x / Grafana 13.1.1,
+and its healthcheck covers Postgres, the MQTT broker, and both CSV services.
 
 Then:
 

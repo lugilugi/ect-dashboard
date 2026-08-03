@@ -3,6 +3,34 @@ import 'package:flutter/material.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 
+String stratDisplayLabel(String strategy) {
+  switch (strategy.toUpperCase()) {
+    case 'ATTACK':
+      return 'BURN';
+    case 'REGEN':
+      return 'HOLD';
+    case 'COAST':
+    case 'PACE':
+      return 'COAST';
+    default:
+      return strategy.toUpperCase();
+  }
+}
+
+Color stratDisplayColor(Palette p, String strategy) {
+  switch (strategy.toUpperCase()) {
+    case 'ATTACK':
+      return p.orange;
+    case 'REGEN':
+      return p.red;
+    case 'COAST':
+    case 'PACE':
+      return p.cyan;
+    default:
+      return p.mainText;
+  }
+}
+
 // =============================================================================
 // PAGE 1: EFFICIENCY GRID (Driver View)
 // =============================================================================
@@ -82,14 +110,13 @@ class EfficiencyGrid extends StatelessWidget {
                   ),
                 ),
 
-                // CENTER COL: Throttle → Speed Bar → Efficiency+Session
+                // CENTER COL: Throttle → Speed Bar (fills remaining space)
                 Expanded(
-                  flex: 5,
+                  flex: 6,
                   child: Column(
                     children: [
                       _buildGridThrottleBar(),
                       Expanded(
-                        flex: 5,
                         child: Container(
                           decoration: BoxDecoration(
                             border: Border(
@@ -99,22 +126,15 @@ class EfficiencyGrid extends StatelessWidget {
                           child: _buildSpeedBarGraph(),
                         ),
                       ),
-                      Expanded(
-                        flex: 2,
-                        child: _buildBottomCenterMetrics(state),
-                      ),
                     ],
                   ),
                 ),
 
-                // RIGHT COL: Strat Marker → Avg Eff → Lap/Dist/Avg Speed → Session Time
+                // RIGHT COL: Avg Eff → Lap/Dist/Avg Speed → Session Time
                 Expanded(
                   flex: 3,
                   child: Column(
                     children: [
-                      Expanded(
-                        child: _FlashingStratMarker(state: state, p: p),
-                      ),
                       Expanded(child: _buildAvgEffCell()),
                       Expanded(child: _buildLapDistAvgSpeedCell()),
                       Expanded(child: _buildSessionTimeCell()),
@@ -137,6 +157,8 @@ class EfficiencyGrid extends StatelessWidget {
     final fraction = (state.speedKmh / maxSpeed).clamp(0.0, 1.0);
     final upperFrac = (state.speedUpperThreshold / maxSpeed).clamp(0.0, 1.0);
     final lowerFrac = (state.speedLowerThreshold / maxSpeed).clamp(0.0, 1.0);
+    final bannerColor = stratDisplayColor(p, state.strategy);
+    final bannerLabel = 'STRATEGY · ${stratDisplayLabel(state.strategy)}';
 
     Color barColor;
     if (state.speedKmh >= state.speedUpperThreshold) {
@@ -151,17 +173,18 @@ class EfficiencyGrid extends StatelessWidget {
       children: [
         Container(
           width: double.infinity,
-          color: barColor,
-          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+          color: bannerColor,
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
           child: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              "SPEED",
+              bannerLabel,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: p.light ? Colors.white : Colors.black,
                 fontWeight: FontWeight.bold,
-                fontSize: 16,
+                fontSize: 12,
+                letterSpacing: 1.0,
               ),
             ),
           ),
@@ -884,191 +907,4 @@ class EfficiencyGrid extends StatelessWidget {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Bottom Center: Efficiency + Session/Lap/Dist
-  // ---------------------------------------------------------------------------
-  Widget _buildBottomCenterMetrics(DashboardState state) {
-    Color instEffColor = state.strategy == "REGEN" ? p.cyan : p.mainText;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              "INSTANT km/kWh",
-              style: TextStyle(
-                color: p.dimText,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.0,
-              ),
-            ),
-          ),
-        ),
-        Expanded(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  state.instKmPerKwh > 90.0
-                      ? "MAX"
-                      : state.instKmPerKwh
-                            .toStringAsFixed(1)
-                            .padLeft(5, '0'),
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                    color: instEffColor,
-                    fontSize: 42,
-                    fontWeight: FontWeight.bold,
-                    height: 1.0,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  "km/kWh",
-                  style: TextStyle(
-                    color: p.dimText,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// -----------------------------------------------------------------------------
-// STRAT MARKER (flashing BURN / COAST / HOLD)
-// -----------------------------------------------------------------------------
-class _FlashingStratMarker extends StatefulWidget {
-  final DashboardState state;
-  final Palette p;
-
-  const _FlashingStratMarker({required this.state, required this.p});
-
-  @override
-  State<_FlashingStratMarker> createState() => _FlashingStratMarkerState();
-}
-
-class _FlashingStratMarkerState extends State<_FlashingStratMarker>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _opacity;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 700),
-    )..repeat(reverse: true);
-    _opacity = Tween<double>(begin: 0.25, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  String _stratLabel(String strategy) {
-    switch (strategy.toUpperCase()) {
-      case 'ATTACK':
-        return 'BURN';
-      case 'REGEN':
-        return 'HOLD';
-      case 'COAST':
-      case 'PACE':
-        return 'COAST';
-      default:
-        return strategy.toUpperCase();
-    }
-  }
-
-  Color _stratColor(String strategy) {
-    switch (strategy.toUpperCase()) {
-      case 'ATTACK':
-        return widget.p.orange;
-      case 'REGEN':
-        return widget.p.red;
-      case 'COAST':
-      case 'PACE':
-        return widget.p.cyan;
-      default:
-        return widget.p.mainText;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = widget.p;
-    final state = widget.state;
-    final hasFault =
-        state.lastErrorCode != 'OK' && state.lastErrorCode != 'NONE';
-    final label = hasFault
-        ? 'ERR ${state.lastErrorCode}'
-        : _stratLabel(state.strategy);
-    final color = hasFault ? p.red : _stratColor(state.strategy);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: hasFault
-            ? Colors.red.shade900.withValues(alpha: 0.5)
-            : color.withValues(alpha: p.light ? 0.2 : 0.12),
-        border: Border(
-          left: BorderSide(color: p.border, width: 1),
-          bottom: BorderSide(color: p.border, width: 1),
-        ),
-      ),
-      child: FadeTransition(
-        opacity: _opacity,
-        child: Center(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      color: color,
-                      fontSize: 40,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2.0,
-                      height: 1.0,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'STRAT',
-                    style: TextStyle(
-                      color: p.dimText,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 2.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

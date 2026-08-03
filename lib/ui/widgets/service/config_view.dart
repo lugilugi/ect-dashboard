@@ -37,6 +37,7 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
   final MapController _geofenceMapController = MapController();
   final Distance _geoDistance = const Distance();
   String _canSearchQuery = '';
+  bool _canSortByName = false;
   bool _geofenceDraftInitialized = false;
   bool _isDrawingGeofence = false;
   LatLng? _draftGeofenceStart;
@@ -231,10 +232,15 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _infoRow('BAUD RATE', '500000'),
-                _infoRow(
-                  'CAN IDs',
-                  '${state.lastCanPayloads.length} active',
-                  valueColor: state.lastCanPayloads.isEmpty ? p.red : p.green,
+                ValueListenableBuilder<int>(
+                  valueListenable: state.canLogVersion,
+                  builder: (context, _, _) => _infoRow(
+                    'CAN IDs',
+                    '${state.lastCanPayloads.length} active',
+                    valueColor: state.lastCanPayloads.isEmpty
+                        ? p.red
+                        : p.green,
+                  ),
                 ),
                 _infoRow(
                   'USB',
@@ -566,6 +572,24 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
   }
 
   Widget _buildCanDictionarySection() {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildSectionHeader(
+            title: 'CAN Dictionary & Log',
+            subtitle:
+                'Decoded CAN reference plus a live frame log, both collapsible.',
+          ),
+          _buildCanDictionaryCollapsible(),
+          const SizedBox(height: 10),
+          _buildCanLogCollapsible(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCanDictionaryCollapsible() {
     final query = _canSearchQuery.trim().toLowerCase();
     final filteredEntries = CanDictionary.entries
         .where((entry) {
@@ -578,153 +602,434 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
           return haystack.contains(query);
         })
         .toList(growable: false);
+    final sortedEntries = List<CanDictionaryEntry>.from(filteredEntries);
+    if (_canSortByName) {
+      sortedEntries.sort((a, b) {
+        final cmp = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+        return cmp != 0 ? cmp : a.canId.compareTo(b.canId);
+      });
+    } else {
+      sortedEntries.sort((a, b) => a.canId.compareTo(b.canId));
+    }
 
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildSectionHeader(
-            title: 'CAN Dictionary',
-            subtitle: 'Reference of decoded CAN IDs and payload meanings.',
+    return _settingsCard(
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: true,
+          leading: Icon(Icons.menu_book_rounded, color: p.cyan, size: 20),
+          title: Text(
+            'CAN DICTIONARY',
+            style: TextStyle(
+              color: p.mainText,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
           ),
-          _settingsCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: _canSearchController,
-                  style: TextStyle(color: p.mainText, fontFamily: 'monospace'),
-                  decoration: InputDecoration(
-                    labelText: 'Search by ID/name',
-                    labelStyle: TextStyle(color: p.dimText),
-                    prefixIcon: Icon(Icons.search_rounded, color: p.dimText),
-                    suffixIcon: _canSearchQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: Icon(Icons.clear_rounded, color: p.dimText),
-                            onPressed: () {
-                              _canSearchController.clear();
-                              setState(() {
-                                _canSearchQuery = '';
-                              });
-                            },
-                          ),
-                  ),
-                  onChanged: (value) {
-                    setState(() {
-                      _canSearchQuery = value;
-                    });
-                  },
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'MATCHES: ${filteredEntries.length}',
-                  style: TextStyle(
-                    color: p.dimText,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 380),
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: p.border),
-                    color: p.light
-                        ? Colors.grey.shade100
-                        : const Color(0xFF101010),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: filteredEntries.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No dictionary entries match your search.',
-                            style: TextStyle(color: p.dimText, fontSize: 11),
-                          ),
-                        )
-                      : ListView.separated(
-                          itemCount: filteredEntries.length,
-                          separatorBuilder: (context, index) =>
-                              Divider(color: p.border, height: 12),
-                          itemBuilder: (context, index) {
-                            final entry = filteredEntries[index];
-                            return Column(
+          subtitle: Text(
+            'Reference of decoded CAN IDs and payload meanings',
+            style: TextStyle(color: p.dimText, fontSize: 10),
+          ),
+          iconColor: p.cyan,
+          collapsedIconColor: p.dimText,
+          textColor: p.mainText,
+          collapsedTextColor: p.mainText,
+          childrenPadding: const EdgeInsets.only(top: 8),
+          children: [
+            TextField(
+              controller: _canSearchController,
+              style: TextStyle(color: p.mainText, fontFamily: 'monospace'),
+              decoration: InputDecoration(
+                labelText: 'Search by ID/name',
+                labelStyle: TextStyle(color: p.dimText),
+                prefixIcon: Icon(Icons.search_rounded, color: p.dimText),
+                suffixIcon: _canSearchQuery.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: Icon(Icons.clear_rounded, color: p.dimText),
+                        onPressed: () {
+                          _canSearchController.clear();
+                          setState(() {
+                            _canSearchQuery = '';
+                          });
+                        },
+                      ),
+              ),
+              onChanged: (value) {
+                setState(() {
+                  _canSearchQuery = value;
+                });
+              },
+            ),
+            const SizedBox(height: 8),
+            _buildCanSortToggle(),
+            const SizedBox(height: 8),
+            Text(
+              'MATCHES: ${filteredEntries.length}',
+              style: TextStyle(
+                color: p.dimText,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'monospace',
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 380),
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                border: Border.all(color: p.border),
+                color: p.light
+                    ? Colors.grey.shade100
+                    : const Color(0xFF101010),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: sortedEntries.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No dictionary entries match your search.',
+                        style: TextStyle(color: p.dimText, fontSize: 11),
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: sortedEntries.length,
+                      separatorBuilder: (context, index) =>
+                          Divider(color: p.border, height: 12),
+                      itemBuilder: (context, index) {
+                        final entry = sortedEntries[index];
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        border: Border.all(color: p.border),
-                                        color: p.light
-                                            ? Colors.white
-                                            : const Color(0xFF181818),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        entry.hexId,
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: p.border),
+                                    color: p.light
+                                        ? Colors.white
+                                        : const Color(0xFF181818),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    entry.hexId,
+                                    style: TextStyle(
+                                      color: p.cyan,
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        entry.label,
                                         style: TextStyle(
-                                          color: p.cyan,
-                                          fontFamily: 'monospace',
+                                          color: p.mainText,
                                           fontWeight: FontWeight.bold,
-                                          fontSize: 11,
+                                          fontSize: 12,
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            entry.label,
-                                            style: TextStyle(
-                                              color: p.mainText,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            '${entry.direction} | DLC ${entry.expectedDlc} | key: ${entry.key}',
-                                            style: TextStyle(
-                                              color: p.dimText,
-                                              fontFamily: 'monospace',
-                                              fontSize: 10,
-                                            ),
-                                          ),
-                                        ],
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${entry.direction} | DLC ${entry.expectedDlc} | key: ${entry.key}',
+                                        style: TextStyle(
+                                          color: p.dimText,
+                                          fontFamily: 'monospace',
+                                          fontSize: 10,
+                                        ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  entry.decodeNotes,
-                                  style: TextStyle(
-                                    color: p.dimText,
-                                    fontSize: 10,
+                                    ],
                                   ),
                                 ),
                               ],
-                            );
-                          },
-                        ),
-                ),
-              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              entry.decodeNotes,
+                              style: TextStyle(
+                                color: p.dimText,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _buildCanLogCollapsible() {
+    return _settingsCard(
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: false,
+          leading: Icon(
+            Icons.receipt_long_rounded,
+            color: p.lightGreen,
+            size: 20,
+          ),
+          title: Text(
+            'CAN LOG',
+            style: TextStyle(
+              color: p.mainText,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+          subtitle: Text(
+            'Live frames received from the vehicle',
+            style: TextStyle(color: p.dimText, fontSize: 10),
+          ),
+          iconColor: p.lightGreen,
+          collapsedIconColor: p.dimText,
+          textColor: p.mainText,
+          collapsedTextColor: p.mainText,
+          childrenPadding: const EdgeInsets.only(top: 8),
+          children: [
+            ValueListenableBuilder<int>(
+              valueListenable: state.canLogVersion,
+              builder: (context, _, _) {
+                final entries = state.canLog;
+                final sorted = List<CanLogEntry>.from(entries);
+                if (_canSortByName) {
+                  sorted.sort((a, b) {
+                    final cmp = _canLabel(a.canId)
+                        .toLowerCase()
+                        .compareTo(_canLabel(b.canId).toLowerCase());
+                    return cmp != 0 ? cmp : a.canId.compareTo(b.canId);
+                  });
+                } else {
+                  sorted.sort((a, b) => a.canId.compareTo(b.canId));
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'BUFFERED: ${entries.length} / ${DashboardState.maxCanLogEntries}',
+                            style: TextStyle(
+                              color: p.dimText,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ),
+                        _buildCmdBtn(
+                          'CLEAR LOG',
+                          () {
+                            state.clearCanLog();
+                          },
+                          compact: true,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _buildCanSortToggle(),
+                    const SizedBox(height: 8),
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 380),
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: p.border),
+                        color: p.light
+                            ? Colors.grey.shade100
+                            : const Color(0xFF101010),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: sorted.isEmpty
+                          ? Center(
+                              child: Text(
+                                'No CAN frames received yet.',
+                                style: TextStyle(
+                                  color: p.dimText,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: sorted.length,
+                              separatorBuilder: (context, index) =>
+                                  Divider(color: p.border, height: 12),
+                              itemBuilder: (context, index) {
+                                final entry = sorted[index];
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            border: Border.all(
+                                              color: p.border,
+                                            ),
+                                            color: p.light
+                                                ? Colors.white
+                                                : const Color(0xFF181818),
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            _canHexId(entry.canId),
+                                            style: TextStyle(
+                                              color: p.cyan,
+                                              fontFamily: 'monospace',
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                _canLabel(entry.canId),
+                                                style: TextStyle(
+                                                  color: p.mainText,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                '${entry.source} | DLC ${entry.dlc} | ${_formatCanTime(entry.receivedAtUtc)}',
+                                                style: TextStyle(
+                                                  color: p.dimText,
+                                                  fontFamily: 'monospace',
+                                                  fontSize: 10,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      entry.payloadHex.isEmpty
+                                          ? '(empty payload)'
+                                          : entry.payloadHex.toUpperCase(),
+                                      style: TextStyle(
+                                        color: p.cyan,
+                                        fontFamily: 'monospace',
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCanSortToggle() {
+    return Row(
+      children: [
+        Text(
+          'SORT',
+          style: TextStyle(
+            color: p.dimText,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
+        const SizedBox(width: 8),
+        _canSortChip('BY ID', !_canSortByName, () {
+          setState(() {
+            _canSortByName = false;
+          });
+        }),
+        const SizedBox(width: 6),
+        _canSortChip('BY NAME', _canSortByName, () {
+          setState(() {
+            _canSortByName = true;
+          });
+        }),
+      ],
+    );
+  }
+
+  Widget _canSortChip(String label, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: active ? p.cyan : p.border),
+          color: active
+              ? p.cyan.withValues(alpha: 0.12)
+              : Colors.transparent,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: active ? p.cyan : p.dimText,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _canLabel(int canId) {
+    for (final entry in CanDictionary.entries) {
+      if (entry.canId == canId) {
+        return entry.label;
+      }
+    }
+    return _canHexId(canId);
+  }
+
+  String _canHexId(int canId) {
+    return '0x${canId.toRadixString(16).toUpperCase().padLeft(3, '0')}';
+  }
+
+  String _formatCanTime(DateTime atUtc) {
+    final local = atUtc.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    String three(int v) => v.toString().padLeft(3, '0');
+    return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}.'
+        '${three(local.millisecond)}';
   }
 
 Widget _buildGeofenceEditorCard(BuildContext context) {

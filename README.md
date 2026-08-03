@@ -62,7 +62,7 @@ uses to allow an update.
 
 ### Single-Container Backend (one Dockerfile, no Compose needed)
 
-- [ops/backend/Dockerfile](ops/backend/Dockerfile) — TimescaleDB + Mosquitto + Telegraf + Grafana in one image
+- [ops/backend/Dockerfile](ops/backend/Dockerfile) — TimescaleDB + Mosquitto + Telegraf + Grafana in one image; runs under tini (PID 1), pins Telegraf 1.31.x / Grafana 13.1.1, healthchecks DB + broker + CSV services
 - [ops/backend/supervisord.conf](ops/backend/supervisord.conf)
 - [ops/backend/mosquitto.conf](ops/backend/mosquitto.conf)
 - [ops/backend/telegraf.conf](ops/backend/telegraf.conf)
@@ -93,7 +93,8 @@ Compose stack — both are fully documented in [BACKEND_GUIDE.md](BACKEND_GUIDE.
 ```bash
 # Option A: one container, everything inside
 docker build -t ect-backend -f ops/backend/Dockerfile .
-docker run -d --name ect-backend -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 ect-backend
+docker run -d --name ect-backend --restart unless-stopped \
+  -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 ect-backend
 
 # Option B: separate containers per service
 cd ops/local-stack && docker compose up --build -d

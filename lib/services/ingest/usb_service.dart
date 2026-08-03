@@ -553,9 +553,9 @@ class UsbService {
       // 1. INPUT LOGIC
       // The simulated vehicle drives even without a running session, matching
       // the real vehicle (which is driven to the grid before START): slow
-      // drive-and-stop cycles keep telemetry flowing while the real standstill
-      // start gate stays passable during each full stop. While a session is
-      // logging, the full race physics run.
+      // drive-and-stop cycles keep telemetry flowing while stationary.
+      // Logging can start or stop regardless of vehicle motion. While a
+      // session is logging, the full race physics run.
       final isLogging = state.isLogging;
       int throttle = ((sin(t / 2) + 1.2) * 40).toInt().clamp(0, 100);
       bool braking = (t % 8 > 6);
@@ -833,7 +833,11 @@ class UsbService {
   }
 
   void _handleParsedCanFrame(CanFrameMessage frame) {
-    state.updateRawCan(frame.canId, frame.payloadHex);
+    state.updateRawCan(
+      frame.canId,
+      frame.payloadHex,
+      source: frame.source,
+    );
 
     final payloadBytes = _hexToBytes(frame.payloadHex);
     _dispatchPayload(frame.canId, payloadBytes);

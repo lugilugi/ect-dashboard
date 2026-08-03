@@ -94,15 +94,8 @@ class SessionOrchestrator {
       );
     }
 
-    if (!gateStatus.ready) {
-      return SessionTransitionDecision(
-        accepted: false,
-        reason: 'Start blocked until standstill hold window is satisfied.',
-        nextControl: control,
-        startGateStatus: gateStatus,
-      );
-    }
-
+    // Logging may start regardless of vehicle motion. The gate status is
+    // still returned for UI/telemetry purposes but never blocks the start.
     return SessionTransitionDecision(
       accepted: true,
       reason: null,

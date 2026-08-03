@@ -3,6 +3,7 @@ services:
     image: timescale/timescaledb:2.17.2-pg16
     container_name: ect-timescaledb
     restart: unless-stopped
+    init: true
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-telemetry}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -31,6 +32,7 @@ services:
     image: eclipse-mosquitto:2.0
     container_name: ect-mosquitto
     restart: unless-stopped
+    init: true
     ports:
       - "${MQTT_PORT:-1883}:1883"
     volumes:
@@ -51,6 +53,7 @@ services:
       mosquitto:
         condition: service_started
     restart: unless-stopped
+    init: true
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
@@ -73,6 +76,7 @@ services:
       mosquitto:
         condition: service_started
     restart: unless-stopped
+    init: true
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
@@ -91,6 +95,7 @@ services:
       timescaledb:
         condition: service_healthy
     restart: unless-stopped
+    init: true
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}

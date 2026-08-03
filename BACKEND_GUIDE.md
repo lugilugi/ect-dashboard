@@ -44,7 +44,10 @@ There are two equivalent ways to run the backend. Pick whichever fits:
 
 - **Option A — Single container** ([ops/backend](ops/backend)): the whole
   stack in one image driven by supervisord. `docker build` + `docker run`,
-  no Compose. Easiest for other people to stand up.
+  no Compose. Easiest for other people to stand up. The image runs under
+  **tini (PID 1)** for clean signal handling, pins **Telegraf 1.31.x** and
+  **Grafana 13.1.1** for reproducible builds, and healthchecks the database,
+  broker, and both CSV services.
 - **Option B — Compose stack** ([ops/local-stack](ops/local-stack)): one
   container per service, easier to scale/replace individually.
 
@@ -66,6 +69,7 @@ Run it — override anything with `-e`:
 ```bash
 docker run -d --name ect-backend \
   -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 \
+  --restart unless-stopped \
   -e POSTGRES_PASSWORD=your_db_password \
   -e GRAFANA_ADMIN_PASSWORD=your_grafana_password \
   ect-backend
@@ -73,6 +77,11 @@ docker run -d --name ect-backend \
 
 That's it. On first boot the container initializes the database and applies
 [db/schema.sql](db/schema.sql) automatically. Check readiness:
+
+> The container entrypoint (`ect-entrypoint.sh`) maps the documented
+> `GRAFANA_ADMIN_USER/PASSWORD` and `POSTGRES_*` overrides onto Grafana's
+> `GF_SECURITY_*` and Telegraf's `TS_*` variables at start, so `docker run
+> -e` works as documented. Explicit `GF_*` / `TS_*` overrides always win.
 
 ```bash
 docker logs -f ect-backend          # watch supervisord start all 6 services
@@ -128,6 +137,7 @@ them through [`.env`](ops/local-stack/.env.example). Override with
 | `TS_DATASOURCE_USER/DB/PASSWORD` | `postgres` / `telemetry` / `postgres` | Grafana datasource credentials. |
 | `EXPORT_DIR`            | `/var/lib/ect-backend/exports` (single) / `/exports` (Compose) | Where csv-streamer and snapshot exports write CSV files. |
 | `CSV_SERVER_PORT`       | `8080`                          | Read-only HTTP download port for the CSV files. |
+| `GF_PATHS_DATA`         | `/var/lib/grafana`              | Grafana data/DB directory (persistent volume in the single container). |
 | `TS_PORT` / `MQTT_PORT` / `GRAFANA_PORT` (Compose) | `5432` / `1883` / `3000` | **Host** port bindings. |
 
 **App side:** set the same broker host/port in the app (Service → Config →
@@ -563,7 +573,7 @@ flush — anything faster just repeats work.
 | Grafana shows datasource error              | `TS_DATASOURCE_URL/PASSWORD` wrong for the deployment type (single: `localhost:5432`, Compose: `timescaledb:5432`). |
 | Grafana loads no dashboards / no datasource | Grafana ≥13 defaults the provisioning path to `/usr/share/grafana/conf/provisioning` — the single container sets `GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect`. Also: provisioning env vars use Go `os.ExpandEnv` semantics — plain `${VAR}` only, the `:-default` syntax expands to an **empty string** (silently broken datasource). |
 | Schema not applied on an existing container | `/docker-entrypoint-initdb.d` runs only on an **empty** data volume — wipe it (`docker compose down -v` or `docker volume rm`). There are no migration files; `db/schema.sql` is the single fresh-install source. |
-| Container never becomes healthy             | The healthcheck runs `pg_isready` **and** `mosquitto_pub` (the image includes `mosquitto-clients`). Verify `POSTGRES_USER`/`POSTGRES_DB` are set and the broker is up (`docker exec ect-backend supervisorctl status`). |
+| Container never becomes healthy             | The healthcheck (30s interval, 60s start period) runs `pg_isready`, a `timeout 5 mosquitto_pub` broker probe, and checks that `csv-server` + `csv-streamer` are RUNNING under supervisord. If it stays unhealthy, check `docker inspect --format '{{json .State.Health.Log}}' ect-backend` and `docker exec ect-backend supervisorctl status`. |
 | `csv-streamer` is not writing CSVs          | Check `docker exec ect-backend supervisorctl status csv-streamer`; confirm `TOPIC_EVENTS`/`TOPIC_SESSIONS` match the app, and that `EXPORT_DIR` is writable by the `telegraf` user. |
 | App shows `SPOOL … DROP-OLDEST`             | Broker outage exceeded the 50,000-batch spool cap; the oldest batches are dropped by design (the vehicle's local CSV mirror still has them). Bring the broker back to resume replay. |
 | `vehicle_setup` was being wiped on session upserts | Fixed in the renewed schema — the upsert now preserves it. Re-apply `db/schema.sql` on an empty volume. |

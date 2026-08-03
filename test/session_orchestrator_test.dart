@@ -19,44 +19,31 @@ SessionControlState _baseControl({
 
 void main() {
   group('SessionOrchestrator', () {
-    test('blocks start when vehicle is not at standstill threshold', () {
-      final orchestrator = SessionOrchestrator(
-        standstillThresholdKmh: 0.5,
-        standstillHold: const Duration(milliseconds: 800),
-      );
-
-      final now = DateTime.now().toUtc();
+    test('allows start while the vehicle is moving', () {
+      final orchestrator = SessionOrchestrator();
       final armed = orchestrator.arm(control: _baseControl());
       final decision = orchestrator.requestStart(
         control: armed,
         speedKmh: 2.0,
-        nowUtc: now,
-      );
-
-      expect(decision.accepted, isFalse);
-      expect(decision.reason, isNotNull);
-      expect(decision.nextControl.sessionState, SessionState.armed);
-    });
-
-    test('allows start after standstill hold is satisfied', () {
-      final orchestrator = SessionOrchestrator(
-        standstillThresholdKmh: 0.5,
-        standstillHold: const Duration(milliseconds: 800),
-      );
-
-      final base = DateTime.now().toUtc();
-      final armed = orchestrator.arm(control: _baseControl());
-
-      orchestrator.evaluateStartGate(speedKmh: 0.0, nowUtc: base);
-      final decision = orchestrator.requestStart(
-        control: armed,
-        speedKmh: 0.0,
-        nowUtc: base.add(const Duration(milliseconds: 900)),
+        nowUtc: DateTime.now().toUtc(),
       );
 
       expect(decision.accepted, isTrue);
       expect(decision.nextControl.sessionState, SessionState.logging);
       expect(decision.nextControl.lapPhase, LapPhase.running);
+    });
+
+    test('allows start immediately without a standstill hold', () {
+      final orchestrator = SessionOrchestrator();
+      final armed = orchestrator.arm(control: _baseControl());
+      final decision = orchestrator.requestStart(
+        control: armed,
+        speedKmh: 0.0,
+        nowUtc: DateTime.now().toUtc(),
+      );
+
+      expect(decision.accepted, isTrue);
+      expect(decision.nextControl.sessionState, SessionState.logging);
     });
 
     test('allows normal stop from logging state', () {
@@ -95,22 +82,16 @@ void main() {
     });
 
     test('allows restart from ENDED state after stop', () {
-      final orchestrator = SessionOrchestrator(
-        standstillThresholdKmh: 0.5,
-        standstillHold: const Duration(milliseconds: 800),
-      );
-
-      final base = DateTime.now().toUtc();
+      final orchestrator = SessionOrchestrator();
       final ended = _baseControl(
         sessionState: SessionState.ended,
         lapsCompleted: 3,
       );
 
-      orchestrator.evaluateStartGate(speedKmh: 0.0, nowUtc: base);
       final decision = orchestrator.requestStart(
         control: ended,
         speedKmh: 0.0,
-        nowUtc: base.add(const Duration(milliseconds: 900)),
+        nowUtc: DateTime.now().toUtc(),
       );
 
       expect(decision.accepted, isTrue);

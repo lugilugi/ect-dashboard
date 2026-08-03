@@ -192,17 +192,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     messenger.showSnackBar(SnackBar(content: Text('$label $status$reason')));
   }
 
-  void _handleAbortSession(BuildContext context, DashboardState state) {
-    if (state.isLogging) {
-      final stopped = state.stopSession(abort: true);
-      if (stopped) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Session aborted forcefully.')),
-        );
-      }
-    }
-  }
-
   void _handleStartStop(BuildContext context, DashboardState state) {
     final p = Palette(state.useLightTheme);
     final messenger = ScaffoldMessenger.of(context);
@@ -210,12 +199,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       final stopped = state.stopSession();
       if (!stopped) {
         messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              state.endBlockReason ??
-                  'Stop blocked until the CAN interface is ready. Hold to force-stop instead.',
-            ),
-          ),
+                  SnackBar(
+                    content: Text(
+                      state.endBlockReason ??
+                          'Stop blocked (replay backlog must drain first).',
+                    ),
+                  ),
         );
       }
     } else {
@@ -339,7 +328,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     SnackBar(
                       content: Text(
                         state.startBlockReason ??
-                            'Start blocked until standstill requirements are met.',
+                            'Start blocked (session must be IDLE, ARMED, or ENDED).',
                       ),
                     ),
                   );
@@ -352,6 +341,70 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
           ],
         ),
+      );
+    }
+  }
+
+  Future<void> _confirmAbortSession(
+    BuildContext context,
+    DashboardState state,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF121212),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 22),
+            SizedBox(width: 8),
+            Text(
+              'ABORT SESSION?',
+              style: TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'This ends the session immediately without waiting for the replay '
+          'backlog to drain. Already-spooled data is kept and will still be '
+          'sent when the broker is reachable.',
+          style: TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text(
+              'ABORT',
+              style: TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    final stopped = state.stopSession(abort: true);
+    if (stopped) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Session aborted forcefully.')),
       );
     }
   }
@@ -838,15 +891,48 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           const SizedBox(width: 10),
                           Container(width: 1, height: topBarHeight * 0.6, color: p.border),
                           const SizedBox(width: 10),
+                          // ABORT: deliberate force-stop behind an are-you-sure
+                          // dialog, visible only while logging.
+                          if (state.isLogging) ...[
+                            GestureDetector(
+                              onTap: () => unawaited(
+                                _confirmAbortSession(context, state),
+                              ),
+                              child: Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: isTight ? 10 : 14,
+                                  vertical: isTight ? 4 : 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: p.red.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: p.red, width: 1),
+                                ),
+                                child: Text(
+                                  'ABORT',
+                                  style: TextStyle(
+                                    color: p.red,
+                                    fontSize: isTight ? 9 : 11,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
                           // START/STOP anchored to far right
                           GestureDetector(
-                            // STOP = tap (urgent), ABORT = long-press (force), START = long-press (deliberate)
+                            // STOP = long-press (deliberate finish), START =
+                            // long-press (deliberate); tap while logging only
+                            // shows a hint so a bump cannot end a session.
                             onTap: state.isLogging
-                                ? () => _handleStartStop(context, state)
+                                ? () => _showInfoSnackbar(
+                                      'Hold STOP to finish the session.',
+                                    )
                                 : null,
-                            onLongPress: state.isLogging
-                                ? () => _handleAbortSession(context, state)
-                                : () => _handleStartStop(context, state),
+                            onLongPress: () =>
+                                _handleStartStop(context, state),
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
                               padding: EdgeInsets.symmetric(
@@ -883,7 +969,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
-                                    state.isLogging ? 'STOP' : 'HOLD',
+                                    state.isLogging ? 'HOLD STOP' : 'HOLD',
                                     style: TextStyle(
                                       color: state.isLogging ? p.red : p.green,
                                       fontSize: isTight ? 11 : 12,

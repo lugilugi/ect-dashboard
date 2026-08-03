@@ -32,6 +32,24 @@ class LapCrossingRecord {
   });
 }
 
+/// A single CAN frame received from the vehicle, kept in a bounded in-memory
+/// log for the Config -> CAN Dictionary & Log screen.
+class CanLogEntry {
+  final int canId;
+  final String payloadHex;
+  final String source;
+  final DateTime receivedAtUtc;
+
+  const CanLogEntry({
+    required this.canId,
+    required this.payloadHex,
+    required this.source,
+    required this.receivedAtUtc,
+  });
+
+  int get dlc => payloadHex.length ~/ 2;
+}
+
 class _SessionTicker {  final SessionControlStore _sessionControl;
   final VoidCallback _onTick;
 
@@ -131,8 +149,8 @@ class TelemetryMetricsStore {
   // Power & Environment
   double mainVoltage = 0.0;
   double current780 = 0.0;
-  double mcTempC = 45.0;
-  double battTempC = 35.0;
+  double mcTempC = 0.0;
+  double battTempC = 0.0;
 
   // Energy
   double energyJ780 = 0.0;
@@ -190,6 +208,9 @@ class DashboardState extends ChangeNotifier {
   final ConfigStateStore _config = ConfigStateStore();
   final TelemetryMetricsStore _metrics = TelemetryMetricsStore();
   final GpsStateStore _gps = GpsStateStore();
+  final List<CanLogEntry> _canLog = <CanLogEntry>[];
+  static const int maxCanLogEntries = 300;
+  final ValueNotifier<int> canLogVersion = ValueNotifier<int>(0);
 
   SpoolHealthStore get spoolHealth => _spoolHealth;
   SessionControlStore get sessionControl => _sessionControl;
@@ -1006,6 +1027,8 @@ class DashboardState extends ChangeNotifier {
 
   // Debug & Engineer screen
   Map<int, String> get lastCanPayloads => _metrics.lastCanPayloads;
+  List<CanLogEntry> get canLog => List<CanLogEntry>.unmodifiable(_canLog);
+  int get canLogEntryCount => _canLog.length;
   List<double> get bmsCells => _metrics.bmsCells;
   set bmsCells(List<double> value) => _metrics.bmsCells = value;
   double get bus12V => _metrics.bus12V;
@@ -1215,6 +1238,7 @@ class DashboardState extends ChangeNotifier {
     _uiFrameTimer?.cancel();
     _uiFrameTimer = null;
     uiFrame.dispose();
+    canLogVersion.dispose();
     _spoolHealth.removeListener(_handleSpoolHealthChanged);
     if (_ownsSpoolHealth) {
       _spoolHealth.dispose();
@@ -1260,8 +1284,8 @@ class DashboardState extends ChangeNotifier {
     isBrakePressed = false;
     mainVoltage = 0;
     current780 = 0;
-    mcTempC = 45.0;
-    battTempC = 35.0;
+    mcTempC = 0.0;
+    battTempC = 0.0;
     energyJ780 = 0;
     speedKmh = 0;
     distanceKm = 0;
@@ -1289,6 +1313,14 @@ class DashboardState extends ChangeNotifier {
     resetTelemetry();
     resetSessionState();
     lastCanPayloads.clear();
+    _canLog.clear();
+    canLogVersion.value++;
+  }
+
+  void clearCanLog() {
+    _canLog.clear();
+    lastCanPayloads.clear();
+    canLogVersion.value++;
   }
 
   void toggleSimulation(bool val) {
@@ -1623,8 +1655,20 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updateRawCan(int id, String payloadHex) {
+  void updateRawCan(int id, String payloadHex, {String source = 'usb'}) {
     lastCanPayloads[id] = payloadHex;
+    _canLog.add(
+      CanLogEntry(
+        canId: id,
+        payloadHex: payloadHex,
+        source: source,
+        receivedAtUtc: DateTime.now().toUtc(),
+      ),
+    );
+    while (_canLog.length > maxCanLogEntries) {
+      _canLog.removeAt(0);
+    }
+    canLogVersion.value++;
   }
 
   void updateExternalGpsStatus({

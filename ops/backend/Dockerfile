@@ -32,6 +32,7 @@ RUN apt-get update \
        ca-certificates \
        gnupg \
        supervisor \
+       tini \
        mosquitto \
        mosquitto-clients \
        python3-paho-mqtt \
@@ -61,7 +62,7 @@ RUN curl -fsSL https://repos.influxdata.com/influxdata-archive.key \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Grafana (Grafana apt repository) -----------------------------------------
-# Uses the latest Grafana from the apt repo. Grafana >=13 changed its default
+# Pinned for reproducible builds. Grafana >=13 changed its default
 # provisioning path to /usr/share/grafana/conf/provisioning, so our
 # provisioning files live in a dedicated dir selected via GF_PATHS_PROVISIONING
 # (see the runtime config below).
@@ -70,7 +71,7 @@ RUN curl -fsSL https://apt.grafana.com/gpg.key \
     && echo "deb [signed-by=/usr/share/keyrings/grafana-apt.gpg] https://apt.grafana.com stable main" \
         > /etc/apt/sources.list.d/grafana.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends grafana \
+    && apt-get install -y --no-install-recommends grafana=13.1.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- runtime configuration -----------------------------------------------------
@@ -80,17 +81,18 @@ COPY ops/backend/telegraf.conf /etc/telegraf/telegraf.conf
 COPY ops/backend/export_to_csv.sh /usr/local/bin/export_to_csv.sh
 COPY ops/backend/csv_server.py /usr/local/bin/csv_server.py
 COPY ops/backend/csv_streamer.py /usr/local/bin/csv_streamer.py
+COPY ops/backend/docker-entrypoint.sh /usr/local/bin/ect-entrypoint.sh
 COPY db/schema.sql /docker-entrypoint-initdb.d/01_schema.sql
 # Provisioning goes in a dedicated dir (not /etc/grafana/provisioning, which
 # the package seeds with sample files) and is selected via GF_PATHS_PROVISIONING.
 COPY ops/grafana/provisioning /etc/grafana/provisioning-ect
 COPY ops/grafana/dashboards /var/lib/grafana/dashboards
 
-RUN chmod +x /usr/local/bin/export_to_csv.sh \
+RUN chmod +x /usr/local/bin/export_to_csv.sh /usr/local/bin/ect-entrypoint.sh \
     && mkdir -p /var/lib/ect-backend/exports /var/lib/mosquitto \
     && chown telegraf:telegraf /var/lib/ect-backend/exports \
     && chown mosquitto:mosquitto /var/lib/mosquitto \
-    && chown -R grafana:grafana /var/lib/grafana/dashboards /etc/grafana/provisioning-ect
+    && chown -R grafana:grafana /var/lib/grafana /etc/grafana/provisioning-ect
 
 # --- default configuration (override any of these with `-e`) -------------------
 ENV POSTGRES_DB=telemetry \
@@ -114,18 +116,25 @@ ENV POSTGRES_DB=telemetry \
     EXPORT_DIR=/var/lib/ect-backend/exports \
     CSV_SERVER_PORT=8080 \
     GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect \
+    GF_PATHS_DATA=/var/lib/grafana \
+    GF_PATHS_LOGS=/var/lib/grafana/log \
+    GF_PATHS_PLUGINS=/var/lib/grafana/plugins \
     # Show dashboard times in the local timezone of the machine viewing
     # them (browser) instead of UTC. The provisioned dashboards also set
     # "timezone": "browser" individually.
     GF_DASHBOARDS_DEFAULT_TIMEZONE=browser
 
-VOLUME ["/var/lib/postgresql/data", "/var/lib/ect-backend/exports"]
+VOLUME ["/var/lib/postgresql/data", "/var/lib/ect-backend/exports", "/var/lib/mosquitto", "/var/lib/grafana"]
 
 EXPOSE 1883 5432 3000 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
-  CMD pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" \
-      && mosquitto_pub -h 127.0.0.1 -p 1883 -t ect/healthcheck -m ok -q 1 -W 3 >/dev/null 2>&1 \
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=5 \
+  CMD pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+      && timeout 5 mosquitto_pub -h 127.0.0.1 -p 1883 -t ect/healthcheck -m ok -q 1 >/dev/null 2>&1 \
+      && supervisorctl status csv-server | grep -q RUNNING \
+      && supervisorctl status csv-streamer | grep -q RUNNING \
       || exit 1
 
-CMD ["/usr/bin/supervisord", "-n"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+CMD ["/usr/local/bin/ect-entrypoint.sh"]
