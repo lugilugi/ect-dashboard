@@ -118,6 +118,10 @@ jobs:
           EXPECTED=$( keytool -list -v -keystore android/app/upload-keystore.jks \
                        -storepass "$STORE_PASS" -alias "$KEY_ALIAS" \
                        | sed -n 's/^[[:space:]]*SHA256: //p' )
+          # apksigner prints lowercase hex without separators; keytool prints
+          # colon-separated uppercase. Normalize both before comparing.
+          CERT=$(echo "$CERT" | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          EXPECTED=$(echo "$EXPECTED" | tr -d ':' | tr '[:lower:]' '[:upper:]')
           echo "APK  cert: ${CERT}"
           echo "Key  cert: ${EXPECTED}"
           if [ -n "$CERT" ] && [ "$CERT" = "$EXPECTED" ]; then
