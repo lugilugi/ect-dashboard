@@ -109,10 +109,14 @@ jobs:
             exit 1
           fi
           CERT=$( "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
-                   | sed -n 's/^.*Certificate SHA-256 digest: //p' )
+                   | sed -n 's/.*SHA-256 digest: //p' )
+          # Read credentials from the key.properties the decode step wrote
+          # (variable content is never re-expanded by bash, unlike inlining
+          # a secret with "$" characters into a double-quoted string).
+          STORE_PASS=$(sed -n 's/^storePassword=//p' android/key.properties)
+          KEY_ALIAS=$(sed -n 's/^keyAlias=//p' android/key.properties)
           EXPECTED=$( keytool -list -v -keystore android/app/upload-keystore.jks \
-                       -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-                       -alias "${{ secrets.ANDROID_KEY_ALIAS }}" 2>/dev/null \
+                       -storepass "$STORE_PASS" -alias "$KEY_ALIAS" \
                        | sed -n 's/^[[:space:]]*SHA256: //p' )
           echo "APK  cert: ${CERT}"
           echo "Key  cert: ${EXPECTED}"
