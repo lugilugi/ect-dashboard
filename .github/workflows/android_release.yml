@@ -73,18 +73,56 @@ jobs:
         id: version
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            echo "build_name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            build_name="${GITHUB_REF_NAME#v}"
+            build_name="${build_name#.}" # tolerate typo'd tags like v.2.2.1
+            echo "build_name=${build_name}" >> "$GITHUB_OUTPUT"
           else
             echo "build_name=1.0.0" >> "$GITHUB_OUTPUT"
           fi
+
+      # Without the release keystore the build would silently fall back to the
+      # runner's ephemeral debug key: a NEW key on every run, so every update
+      # fails with a signature mismatch ("App not installed"). Fail loudly
+      # instead of publishing such an APK.
+      - name: Require release keystore
+        if: env.HAS_RELEASE_KEYSTORE != 'true'
+        run: |
+          echo "::error::ANDROID_KEYSTORE_BASE64 is not set. Refusing to build: an APK signed with the fallback debug key cannot be installed as an update over a previously-signed version. Configure the 4 ANDROID_KEYSTORE_* secrets and re-run."
+          exit 1
 
       - name: Build APK
         run: |
           flutter build apk --release \
             --build-name=${{ steps.version.outputs.build_name }} \
             --build-number=${{ github.run_number }}
-          mv build/app/outputs/flutter-apk/app-release.apk \
-             build/app/outputs/flutter-apk/ect-dashboard.apk
+
+      - name: Verify APK signing certificate
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER=$(find "$SDK/build-tools" -maxdepth 2 -name apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner not found under $SDK/build-tools"
+            exit 1
+          fi
+          CERT=$( "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
+                   | sed -n 's/^.*Certificate SHA-256 digest: //p' )
+          EXPECTED=$( keytool -list -v -keystore android/app/upload-keystore.jks \
+                       -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+                       -alias "${{ secrets.ANDROID_KEY_ALIAS }}" 2>/dev/null \
+                       | sed -n 's/^[[:space:]]*SHA256: //p' )
+          echo "APK  cert: ${CERT}"
+          echo "Key  cert: ${EXPECTED}"
+          if [ -n "$CERT" ] && [ "$CERT" = "$EXPECTED" ]; then
+            echo "Signing certificate matches the release keystore."
+          else
+            echo "::error::APK signed with an unexpected certificate; refusing to publish."
+            exit 1
+          fi
+
+      - name: Rename APK
+        run: mv build/app/outputs/flutter-apk/app-release.apk \
+              build/app/outputs/flutter-apk/ect-dashboard.apk
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
