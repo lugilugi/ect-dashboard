@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
+import 'package:telemetry_dashboard/ui/widgets/driver/driver_track_map.dart';
 
 String stratDisplayLabel(String strategy) {
   switch (strategy.toUpperCase()) {
@@ -130,14 +131,46 @@ class EfficiencyGrid extends StatelessWidget {
                   ),
                 ),
 
-                // RIGHT COL: Avg Eff → Lap/Dist/Avg Speed → Session Time
+                // RIGHT COL: Track Map (top half) → Session Time (priority)
+                // + Lap/Distance/Avg Eff (bottom half)
                 Expanded(
                   flex: 3,
                   child: Column(
                     children: [
-                      Expanded(child: _buildAvgEffCell()),
-                      Expanded(child: _buildLapDistAvgSpeedCell()),
-                      Expanded(child: _buildSessionTimeCell()),
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            border: Border(
+                              left: BorderSide(color: p.border, width: 1),
+                              bottom: BorderSide(color: p.border, width: 1),
+                            ),
+                          ),
+                          child: DriverTrackMap(state: state, p: p),
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            border: Border(
+                              left: BorderSide(color: p.border, width: 1),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: _buildSessionTimeCell(),
+                              ),
+                              Container(height: 1, color: p.border),
+                              Expanded(
+                                flex: 2,
+                                child: _buildLapDistAvgEffCell(),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -306,163 +339,50 @@ class EfficiencyGrid extends StatelessWidget {
   }
 
   // ---------------------------------------------------------------------------
-  // AVG EFF (giant) + Total Energy (corner)
+  // LAP / DISTANCE (left) | AVG EFF (right)
   // ---------------------------------------------------------------------------
-  Widget _buildAvgEffCell() {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(color: p.border, width: 1),
-          bottom: BorderSide(color: p.border, width: 1),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                "AVG EFF",
-                style: TextStyle(
-                  color: p.dimText,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.0,
+  Widget _buildLapDistAvgEffCell() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 2,
+                child: _buildLabeledValue(
+                  label: "LAP",
+                  value: state.lapNumber.toString(),
+                  valueColor: p.pink,
+                  valueSize: 34,
                 ),
               ),
-            ),
-          ),
-          Expanded(
-            child: Stack(
-              children: [
-                Center(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          state.avgKmPerKwh.toStringAsFixed(1).padLeft(5, '0'),
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontFeatures: const [
-                              FontFeature.tabularFigures(),
-                            ],
-                            color: p.lightGreen,
-                            fontSize: 64,
-                            fontWeight: FontWeight.bold,
-                            height: 1.0,
-                          ),
-                        ),
-                        Text(
-                          "km/kWh",
-                          style: TextStyle(
-                            color: p.dimText,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+              Container(width: 1, color: p.border),
+              Expanded(
+                flex: 3,
+                child: _buildLabeledValue(
+                  label: "DISTANCE",
+                  value: state.distanceKm.toStringAsFixed(2),
+                  valueColor: p.teal,
+                  valueSize: 34,
+                  unit: "km",
                 ),
-                Positioned(
-                  right: 8,
-                  bottom: 6,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        "ENERGY",
-                        style: TextStyle(
-                          color: p.dimText,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                      Text(
-                        "${(state.energyJ780 / 3600.0).toStringAsFixed(1)} Wh",
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontFeatures: const [
-                            FontFeature.tabularFigures(),
-                          ],
-                          color: p.purple,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // LAP / DISTANCE (left) | AVG SPEED (right)
-  // ---------------------------------------------------------------------------
-  Widget _buildLapDistAvgSpeedCell() {
-    final elapsedH = state.sessionTimeSeconds / 3600.0;
-    final avgSpeedKmh = elapsedH > 0 ? state.distanceKm / elapsedH : 0.0;
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(color: p.border, width: 1),
-          bottom: BorderSide(color: p.border, width: 1),
         ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  flex: 2,
-                  child: _buildLabeledValue(
-                    label: "LAP",
-                    value: state.lapNumber.toString(),
-                    valueColor: p.pink,
-                    valueSize: 34,
-                  ),
-                ),
-                Container(width: 1, color: p.border),
-                Expanded(
-                  flex: 3,
-                  child: _buildLabeledValue(
-                    label: "DISTANCE",
-                    value: state.distanceKm.toStringAsFixed(2),
-                    valueColor: p.teal,
-                    valueSize: 34,
-                    unit: "km",
-                  ),
-                ),
-              ],
-            ),
+        Container(width: 1, color: p.border),
+        Expanded(
+          child: _buildLabeledValue(
+            label: "AVG EFF",
+            value: state.avgKmPerKwh.toStringAsFixed(1).padLeft(5, '0'),
+            valueColor: p.lightGreen,
+            valueSize: 42,
+            unit: "km/kWh",
           ),
-          Container(width: 1, color: p.border),
-          Expanded(
-            child: _buildLabeledValue(
-              label: "AVG SPEED",
-              value: avgSpeedKmh.toStringAsFixed(1).padLeft(4, '0'),
-              valueColor: p.lightGreen,
-              valueSize: 42,
-              unit: "km/h",
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -534,72 +454,67 @@ class EfficiencyGrid extends StatelessWidget {
   }
 
   // ---------------------------------------------------------------------------
-  // SESSION TIME (giant)
+  // SESSION TIME (priority)
   // ---------------------------------------------------------------------------
   Widget _buildSessionTimeCell() {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: p.border, width: 1)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, top: 6, right: 8),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              "SESSION TIME",
+              style: TextStyle(
+                color: p.dimText,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: Center(
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                "SESSION TIME",
-                style: TextStyle(
-                  color: p.dimText,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.0,
-                ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    state.sessionTimeString,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontFeatures: const [
+                        FontFeature.tabularFigures(),
+                      ],
+                      color: p.amber,
+                      fontSize: 48,
+                      fontWeight: FontWeight.bold,
+                      height: 1.0,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    state.systemTimeString,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontFeatures: const [
+                        FontFeature.tabularFigures(),
+                      ],
+                      color: p.amber,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          Expanded(
-            child: Center(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      state.sessionTimeString,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontFeatures: const [
-                          FontFeature.tabularFigures(),
-                        ],
-                        color: p.amber,
-                        fontSize: 42,
-                        fontWeight: FontWeight.bold,
-                        height: 1.0,
-                      ),
-                    ),
-                    const SizedBox(height: 1),
-                    Text(
-                      state.systemTimeString,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontFeatures: const [
-                          FontFeature.tabularFigures(),
-                        ],
-                        color: p.amber,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

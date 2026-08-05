@@ -304,6 +304,40 @@ class DashboardState extends ChangeNotifier {
   List<LapCrossingRecord> get lapCrossings =>
       List<LapCrossingRecord>.unmodifiable(_lapCrossings);
 
+  // Recent GPS fixes for the driver track map (ring buffer). Appended for
+  // every valid fix regardless of session state so the trace survives short
+  // gaps and self-trims.
+  static const int maxGpsTrackPoints = 400;
+  static const double _gpsTrackMinStepM = 2.0;
+  final List<GeoPoint> _gpsTrack = <GeoPoint>[];
+
+  List<GeoPoint> get gpsTrackPoints =>
+      List<GeoPoint>.unmodifiable(_gpsTrack);
+
+  void _appendGpsTrackPoint({required double lat, required double lon}) {
+    final point = GeoPoint(lat: lat, lon: lon);
+    if (_gpsTrack.isNotEmpty) {
+      final last = _gpsTrack.last;
+      if (_distanceMeters(last.lat, last.lon, lat, lon) <
+          _gpsTrackMinStepM) {
+        return;
+      }
+    }
+    _gpsTrack.add(point);
+    if (_gpsTrack.length > maxGpsTrackPoints) {
+      _gpsTrack.removeAt(0);
+    }
+  }
+
+  double _distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadiusM = 6371000.0;
+    final dLat = (lat2 - lat1) * pi / 180.0;
+    final dLon = (lon2 - lon1) * pi / 180.0;
+    final a = dLat * dLat +
+        cos(lat1 * pi / 180.0) * cos(lat2 * pi / 180.0) * dLon * dLon;
+    return earthRadiusM * sqrt(a);
+  }
+
   void _recordLapCrossing({
     required int lapNumber,
     required double lat,
@@ -756,6 +790,10 @@ class DashboardState extends ChangeNotifier {
     if (lat.abs() > 0.001 || lon.abs() > 0.001) {
       _gps.lastKnownLat = lat;
       _gps.lastKnownLon = lon;
+    }
+
+    if ((lat.abs() > 0.0001 || lon.abs() > 0.0001)) {
+      _appendGpsTrackPoint(lat: lat, lon: lon);
     }
 
     if (lapDividerMode != LapDividerMode.geofence || !isLogging) {

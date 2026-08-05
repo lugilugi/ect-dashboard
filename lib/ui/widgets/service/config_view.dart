@@ -13,6 +13,8 @@ import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
 import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
+import 'package:telemetry_dashboard/ui/widgets/common/map_markers.dart';
+import 'package:telemetry_dashboard/ui/widgets/common/map_tiles.dart';
 enum ConfigSection {
   connectivity,
   canDictionary,
@@ -1161,14 +1163,7 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                         },
                       ),
                       children: [
-                        TileLayer(
-                          urlTemplate: state.useLightTheme
-                              ? 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
-                              : 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.example.telemetry_dashboard',
-                          maxNativeZoom: 19,
-                          maxZoom: 20,
-                        ),
+                        RoadMapTileLayer(useLightTheme: state.useLightTheme),
                         if (state.hasCurrentGpsSample)
                           CircleLayer(
                             circles: [
@@ -1225,7 +1220,7 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                                 point: LatLng(state.currentGpsLat!, state.currentGpsLon!),
                                 width: 28,
                                 height: 28,
-                                child: const _PulsingUserLocationMarker(),
+                                child: const PulsingUserLocationMarker(),
                               ),
                             if (_draftGeofenceStart != null)
                               Marker(
@@ -3222,70 +3217,7 @@ class _AlertVariableRowState extends State<_AlertVariableRow> {
   }
 }
 
-class _PulsingUserLocationMarker extends StatefulWidget {
-  const _PulsingUserLocationMarker();
 
-  @override
-  State<_PulsingUserLocationMarker> createState() => _PulsingUserLocationMarkerState();
-}
-
-class _PulsingUserLocationMarkerState extends State<_PulsingUserLocationMarker>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _pulseController;
-
-  @override
-  void initState() {
-    super.initState();
-    _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _pulseController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _pulseController,
-      builder: (context, child) {
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              width: 24.0 * _pulseController.value,
-              height: 24.0 * _pulseController.value,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.blue.withValues(alpha: 0.6 * (1.0 - _pulseController.value)),
-              ),
-            ),
-            Container(
-              width: 12.0,
-              height: 12.0,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.blue,
-              ),
-            ),
-            Container(
-              width: 14.0,
-              height: 14.0,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 1.5),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
 
 
 
