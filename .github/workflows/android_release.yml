@@ -137,7 +137,7 @@ jobs:
              build/app/outputs/flutter-apk/ect-dashboard.apk
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ect-dashboard-apk
           path: build/app/outputs/flutter-apk/ect-dashboard.apk
