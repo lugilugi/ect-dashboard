@@ -61,7 +61,10 @@ jobs:
         if: env.HAS_RELEASE_KEYSTORE == 'true'
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
-          cat > android/key.properties <<EOF
+          # Quoted delimiter ('EOF'): without it bash would expand any "$var"-
+          # looking substrings inside the passwords (e.g. "$v4Hs6x") and the
+          # keystore password would come out corrupted.
+          cat > android/key.properties <<'EOF'
           storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword=${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
