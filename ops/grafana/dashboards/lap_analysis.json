@@ -156,7 +156,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND(((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) / 3600.0)::numeric, 1) AS energy_wh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours');",
+          "rawSql": "SELECT ROUND((((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) + (MAX(value) FILTER (WHERE signal_name = 'Joules_740') - MIN(value) FILTER (WHERE signal_name = 'Joules_740'))) / 3600.0)::numeric, 1) AS energy_wh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('Joules_780', 'Joules_740') AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours');",
           "refId": "A"
         }
       ],
@@ -203,7 +203,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND((d.dist_km / NULLIF(d.energy_kwh, 0))::numeric, 1) AS eff_km_per_kwh FROM (SELECT MAX(value) FILTER (WHERE signal_name = 'Distance_Km') - MIN(value) FILTER (WHERE signal_name = 'Distance_Km') AS dist_km, (MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) / 3600000.0 AS energy_kwh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')) d;",
+          "rawSql": "SELECT ROUND((d.dist_km / NULLIF(d.energy_kwh, 0))::numeric, 1) AS eff_km_per_kwh FROM (SELECT MAX(value) FILTER (WHERE signal_name = 'Distance_Km') - MIN(value) FILTER (WHERE signal_name = 'Distance_Km') AS dist_km, ((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) + (MAX(value) FILTER (WHERE signal_name = 'Joules_740') - MIN(value) FILTER (WHERE signal_name = 'Joules_740'))) / 3600000.0 AS energy_kwh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name IN ('Distance_Km', 'Joules_780', 'Joules_740') AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')) d;",
           "refId": "A"
         }
       ],
@@ -669,7 +669,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT lap, duration_s, distance_km, energy_wh, avg_speed_kmh, max_speed_kmh, eff_km_per_kwh, ROUND((duration_s - MIN(duration_s) OVER ())::numeric, 1) AS delta_s_vs_best FROM (SELECT lap_number::int AS lap, ROUND((MAX(ts_session_ms::bigint) - MIN(ts_session_ms::bigint)) / 1000.0::numeric, 1) AS duration_s, ROUND((MAX(value) FILTER (WHERE signal_name = 'Distance_Km') - MIN(value) FILTER (WHERE signal_name = 'Distance_Km'))::numeric, 2) AS distance_km, ROUND(((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) / 3600.0)::numeric, 1) AS energy_wh, ROUND(AVG(value) FILTER (WHERE signal_name = 'Speed_Kmh')::numeric, 1) AS avg_speed_kmh, ROUND(MAX(value) FILTER (WHERE signal_name = 'Speed_Kmh')::numeric, 1) AS max_speed_kmh, ROUND(((MAX(value) FILTER (WHERE signal_name = 'Distance_Km') - MIN(value) FILTER (WHERE signal_name = 'Distance_Km')) / NULLIF(((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) / 3600000.0), 0))::numeric, 1) AS eff_km_per_kwh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND lap_number IS NOT NULL AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY lap_number::int) t ORDER BY lap;",
+          "rawSql": "SELECT t.lap, t.duration_s, t.distance_km, t.energy_wh, t.avg_speed_kmh, t.max_speed_kmh, t.eff_km_per_kwh, ROUND((t.duration_s - MIN(t.duration_s) OVER ())::numeric, 1) AS delta_s_vs_best, ROUND(ap.avg_power_w::numeric, 0) AS avg_power_w, ROUND(sh.coast_pct, 1) AS coast_pct, ROUND(sh.brake_pct, 1) AS brake_pct, t.fault_samples FROM (SELECT lap_number::int AS lap, ROUND((MAX(ts_session_ms::bigint) - MIN(ts_session_ms::bigint)) / 1000.0::numeric, 1) AS duration_s, ROUND((MAX(value) FILTER (WHERE signal_name = 'Distance_Km') - MIN(value) FILTER (WHERE signal_name = 'Distance_Km'))::numeric, 2) AS distance_km, ROUND((((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) + (MAX(value) FILTER (WHERE signal_name = 'Joules_740') - MIN(value) FILTER (WHERE signal_name = 'Joules_740'))) / 3600.0)::numeric, 1) AS energy_wh, ROUND(AVG(value) FILTER (WHERE signal_name = 'Speed_Kmh')::numeric, 1) AS avg_speed_kmh, ROUND(MAX(value) FILTER (WHERE signal_name = 'Speed_Kmh')::numeric, 1) AS max_speed_kmh, ROUND(((MAX(value) FILTER (WHERE signal_name = 'Distance_Km') - MIN(value) FILTER (WHERE signal_name = 'Distance_Km')) / NULLIF((((MAX(value) FILTER (WHERE signal_name = 'Joules_780') - MIN(value) FILTER (WHERE signal_name = 'Joules_780')) + (MAX(value) FILTER (WHERE signal_name = 'Joules_740') - MIN(value) FILTER (WHERE signal_name = 'Joules_740'))) / 3600000.0), 0))::numeric, 1) AS eff_km_per_kwh, COUNT(*) FILTER (WHERE signal_name = 'Error_Count' AND value > 0) AS fault_samples FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND lap_number IS NOT NULL AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY lap_number::int) t LEFT JOIN (SELECT lap_number::int AS lap, AVG(v * i) AS avg_power_w FROM (SELECT time_bucket('1s', time) AS bucket, lap_number, AVG(value) FILTER (WHERE signal_name = 'Voltage_780') AS v, AVG(value) FILTER (WHERE signal_name = 'Current_780') AS i FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND lap_number IS NOT NULL AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2) p GROUP BY 1) ap ON ap.lap = t.lap LEFT JOIN (SELECT lap_number::int AS lap, AVG(CASE WHEN spd > 0.5 AND thr <= 0.5 THEN 1.0 ELSE 0.0 END) * 100.0 AS coast_pct, AVG(CASE WHEN brk > 0.5 THEN 1.0 ELSE 0.0 END) * 100.0 AS brake_pct FROM (SELECT time_bucket('1s', time) AS bucket, lap_number, MAX(value) FILTER (WHERE signal_name = 'Speed_Kmh') AS spd, MAX(value) FILTER (WHERE signal_name = 'Throttle_Percent') AS thr, MAX(value) FILTER (WHERE signal_name = 'Brake_Active') AS brk FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND lap_number IS NOT NULL AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1, 2) s GROUP BY 1) sh ON sh.lap = t.lap ORDER BY t.lap;",
           "refId": "A"
         }
       ],
@@ -715,7 +715,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT to_timestamp((ts_session_ms::bigint - MIN(ts_session_ms::bigint) OVER (PARTITION BY lap_number)) / 1000.0) AS \"time\", ('Lap ' || lap_number::text) AS metric, ((value - MIN(value) OVER (PARTITION BY lap_number)) / 3600.0)::double precision AS energy_wh FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND signal_name = 'Joules_780' AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') ORDER BY ts_session_ms::bigint;",
+          "rawSql": "SELECT to_timestamp((s.ts - MIN(s.ts) OVER (PARTITION BY s.lap)) / 1000.0) AS \"time\", ('Lap ' || s.lap::text) AS metric, (SUM(s.v780 + s.v740) OVER (PARTITION BY s.lap ORDER BY s.ts) / 3600.0)::double precision AS energy_wh FROM (SELECT ts_session_ms::bigint AS ts, lap_number::int AS lap, SUM(value) FILTER (WHERE signal_name = 'Joules_780') AS v780, SUM(value) FILTER (WHERE signal_name = 'Joules_740') AS v740 FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND signal_name IN ('Joules_780', 'Joules_740') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY ts_session_ms, lap_number) s ORDER BY s.ts;",
           "refId": "A"
         }
       ],
@@ -761,6 +761,124 @@
       ],
       "title": "Recovery / Fault Events",
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 34
+      },
+      "id": 101,
+      "options": {
+        "layers": [
+          {
+            "name": "GPS Track",
+            "type": "track",
+            "config": {
+              "showRoute": true,
+              "showMarkers": true,
+              "marker": {
+                "symbol": "circle",
+                "color": "red"
+              },
+              "route": {
+                "color": "dark-blue",
+                "opacity": 0.5,
+                "lineWidth": 2,
+                "extendLast": true
+              }
+            },
+            "location": {
+              "mode": "auto"
+            },
+            "tooltip": true,
+            "labels": {
+              "mode": "none"
+            },
+            "style": {
+              "color": {
+                "mode": "continuous-GrYlRd",
+                "field": "speed"
+              },
+              "opacity": 0.8,
+              "lineWidth": 2
+            }
+          }
+        ],
+        "view": {
+          "lat": 14.566,
+          "lon": 120.992,
+          "zoom": 1
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT lt.time AS \"time\", lt.value AS lat, ln.value AS lon, sp.value AS speed FROM (SELECT time, value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'GPS_Latitude_Deg' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')) lt JOIN (SELECT time, value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'GPS_Longitude_Deg' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')) ln ON ln.time = lt.time LEFT JOIN (SELECT time, value FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND signal_name = 'Speed_Kmh' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')) sp ON sp.time = lt.time ORDER BY lt.time;",
+          "refId": "A"
+        }
+      ],
+      "title": "LAP GPS TRACK",
+      "type": "geomap"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 34
+      },
+      "id": 102,
+      "interval": "2s",
+      "maxDataPoints": 1000,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "timescaledb"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time_bucket('$__interval', bucket) AS \"time\", AVG(CASE WHEN spd > 0.5 AND thr <= 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS coast_share, AVG(CASE WHEN brk > 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS brake_share, AVG(CASE WHEN spd <= 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS stop_share FROM (SELECT time_bucket('1s', time) AS bucket, MAX(value) FILTER (WHERE signal_name = 'Speed_Kmh') AS spd, MAX(value) FILTER (WHERE signal_name = 'Throttle_Percent') AS thr, MAX(value) FILTER (WHERE signal_name = 'Brake_Active') AS brk FROM telemetry_raw WHERE session_uid::text = '${session_id}' AND ('${lap_number}' = '-1' OR lap_number = '${lap_number}') AND signal_name IN ('Speed_Kmh', 'Throttle_Percent', 'Brake_Active') AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours') GROUP BY 1) s GROUP BY 1 ORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Selected Lap Coasting Detail",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -832,6 +950,6 @@
   "timezone": "browser",
   "title": "ECT Lap Analysis",
   "uid": "ect-lap-analysis",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

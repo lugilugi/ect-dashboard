@@ -1,0 +1,336 @@
+# Provisioned alert rules for the ECT vehicle (Grafana >= 10 unified alerting).
+# UI-only delivery: no contact points/policies are provisioned, so alerts
+# evaluate, fire and are visible under Alerting without external notifiers.
+# `disableProvenance: true` lets the team tune thresholds in the Grafana UI
+# without the provisioner reverting them on restart.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: ECT Vehicle
+    folder: ECT
+    interval: 1m
+    rules:
+      - uid: ect-low-pack-voltage
+        title: "Pack voltage below 40 V"
+        condition: C
+        disableProvenance: true
+        for: 1m
+        labels:
+          severity: critical
+          signal: voltage
+        annotations:
+          summary: "Pack voltage dropped below 40 V (latest session, last 5 min)"
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            datasourceUid: timescaledb
+            queryType: ""
+            model:
+              refId: A
+              datasource: { type: postgres, uid: timescaledb }
+              format: table
+              rawQuery: true
+              rawSql: "SELECT MIN(value) AS v FROM telemetry_raw WHERE signal_name IN ('Voltage_780', 'Voltage_740') AND time > now() - interval '5 minutes' AND session_uid::text = (SELECT uid::text FROM sessions ORDER BY created_at DESC LIMIT 1);"
+              intervalMs: 60000
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [40]
+                  operator:
+                    type: and
+            relativeTimeRange:
+              from: 0
+              to: 0
+
+      - uid: ect-mc-temp-high
+        title: "Motor controller temperature above 65 C"
+        condition: C
+        disableProvenance: true
+        for: 1m
+        labels:
+          severity: critical
+          signal: temperature
+        annotations:
+          summary: "MC_Temp_C exceeded 65 C (latest session, last 5 min)"
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            datasourceUid: timescaledb
+            queryType: ""
+            model:
+              refId: A
+              datasource: { type: postgres, uid: timescaledb }
+              format: table
+              rawQuery: true
+              rawSql: "SELECT MAX(value) AS t FROM telemetry_raw WHERE signal_name = 'MC_Temp_C' AND time > now() - interval '5 minutes' AND session_uid::text = (SELECT uid::text FROM sessions ORDER BY created_at DESC LIMIT 1);"
+              intervalMs: 60000
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [65]
+                  operator:
+                    type: and
+            relativeTimeRange:
+              from: 0
+              to: 0
+
+      - uid: ect-batt-temp-high
+        title: "Battery temperature above 55 C"
+        condition: C
+        disableProvenance: true
+        for: 1m
+        labels:
+          severity: warning
+          signal: temperature
+        annotations:
+          summary: "Batt_Temp_C exceeded 55 C (latest session, last 5 min)"
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            datasourceUid: timescaledb
+            queryType: ""
+            model:
+              refId: A
+              datasource: { type: postgres, uid: timescaledb }
+              format: table
+              rawQuery: true
+              rawSql: "SELECT MAX(value) AS t FROM telemetry_raw WHERE signal_name = 'Batt_Temp_C' AND time > now() - interval '5 minutes' AND session_uid::text = (SELECT uid::text FROM sessions ORDER BY created_at DESC LIMIT 1);"
+              intervalMs: 60000
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [55]
+                  operator:
+                    type: and
+            relativeTimeRange:
+              from: 0
+              to: 0
+
+      - uid: ect-gps-fallback-active
+        title: "GPS fallback active"
+        condition: C
+        disableProvenance: true
+        for: 2m
+        labels:
+          severity: warning
+          signal: gps
+        annotations:
+          summary: "GPS_Fallback_Active stayed on for 2+ minutes (latest session)"
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            datasourceUid: timescaledb
+            queryType: ""
+            model:
+              refId: A
+              datasource: { type: postgres, uid: timescaledb }
+              format: table
+              rawQuery: true
+              rawSql: "SELECT MAX(value) AS f FROM telemetry_raw WHERE signal_name = 'GPS_Fallback_Active' AND time > now() - interval '10 minutes' AND session_uid::text = (SELECT uid::text FROM sessions ORDER BY created_at DESC LIMIT 1);"
+              intervalMs: 60000
+            relativeTimeRange:
+              from: 600
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+                  operator:
+                    type: and
+            relativeTimeRange:
+              from: 0
+              to: 0
+
+      - uid: ect-fault-spike
+        title: "Error_Count faults detected"
+        condition: C
+        disableProvenance: true
+        for: 1m
+        labels:
+          severity: warning
+          signal: faults
+        annotations:
+          summary: "Error_Count > 0 reported (latest session, last 5 min)"
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            datasourceUid: timescaledb
+            queryType: ""
+            model:
+              refId: A
+              datasource: { type: postgres, uid: timescaledb }
+              format: table
+              rawQuery: true
+              rawSql: "SELECT MAX(value) AS e FROM telemetry_raw WHERE signal_name = 'Error_Count' AND time > now() - interval '5 minutes' AND session_uid::text = (SELECT uid::text FROM sessions ORDER BY created_at DESC LIMIT 1);"
+              intervalMs: 60000
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+            relativeTimeRange:
+              from: 0
+              to: 0
+
+      - uid: ect-telemetry-stall
+        title: "Telemetry data stall"
+        condition: C
+        disableProvenance: true
+        for: 2m
+        labels:
+          severity: critical
+          signal: pipeline
+        annotations:
+          summary: "No telemetry rows ingested for 90+ seconds (app/broker/ingest down?)"
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            datasourceUid: timescaledb
+            queryType: ""
+            model:
+              refId: A
+              datasource: { type: postgres, uid: timescaledb }
+              format: table
+              rawQuery: true
+              rawSql: "SELECT COUNT(*) AS n FROM telemetry_raw WHERE time > now() - interval '90 seconds';"
+              intervalMs: 60000
+            relativeTimeRange:
+              from: 90
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+            relativeTimeRange:
+              from: 0
+              to: 0
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+            relativeTimeRange:
+              from: 0
+              to: 0
