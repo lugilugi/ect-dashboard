@@ -296,11 +296,12 @@ class UsbService {
 
       await _port!.setDTR(true);
       await _port!.setRTS(true);
-      // Note: For CDC-ACM (ESP32-C3 USB Serial/JTAG), baud rate is
-      // informational only — data moves at USB speed. Set to match
-      // CAN_BAUD_RATE for consistency.
+      // For CDC-ACM (ESP32-C3 USB Serial/JTAG), baud rate is
+      // informational only — data moves at USB speed. Classic UART
+      // bridges (CP210x/CH340/FTDI) need firmware-matching baud, set in
+      // Config -> Connectivity (persisted).
       await _port!.setPortParameters(
-        500000,
+        state.usbBaudRate,
         UsbPort.DATABITS_8,
         UsbPort.STOPBITS_1,
         UsbPort.PARITY_NONE,
@@ -401,6 +402,28 @@ class UsbService {
     }
   }
 
+  /// Reacts to a baud rate change made in Config -> Connectivity (the state
+  /// is already updated by DashboardState.updateUsbBaudRate): reopens the
+  /// current port at the new baud so the change applies without a restart.
+  void applyBaudRate(int baud) {
+    final hadPort = _port != null || _desktopPort != null;
+    final wasSimulated = state.isSimulated;
+    _subscription?.cancel();
+    _subscription = null;
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
+    _port?.close();
+    _port = null;
+    _desktopPort?.close();
+    _desktopPort = null;
+    state.setConnectionState(false);
+
+    debugLog.info('USB baud rate changed to $baud; reconnecting');
+    if (hadPort && !wasSimulated && !state.enableSimulation) {
+      unawaited(_connect());
+    }
+  }
+
   /// Order of desktop serial ports to try. The user's Config selection wins,
   /// then an explicit --dart-define=DESKTOP_SERIAL_PORT=COM5, then
   /// auto-detection: native ESP32 CDC (/dev/ttyACM*), then classic UART
@@ -492,14 +515,16 @@ class UsbService {
 
         // For ESP32-C3 USB Serial/JTAG (CDC-ACM) the baud rate is
         // informational; for classic UART bridges it must match the
-        // firmware (115200 typical).
+        // firmware (115200 typical). Configurable in Config -> Connectivity.
         final config = port.config;
-        config.baudRate = 115200;
+        config.baudRate = state.usbBaudRate;
         port.config = config;
 
         _desktopPort = port;
         state.setConnectionState(true);
-        debugLog.info('Opened serial port $portName @ 115200 baud');
+        debugLog.info(
+          'Opened serial port $portName @ ${state.usbBaudRate} baud',
+        );
 
         _desktopSubscription = SerialPortReader(port).stream.listen(
           _processBytes,

@@ -45,6 +45,34 @@ void main() {
 
       state.dispose();
     });
+
+    test('USB baud rate notifies and invokes the service callback', () {
+      final state = DashboardState();
+      final applied = <int>[];
+      state.onUsbBaudRateChanged = applied.add;
+
+      expect(state.usbBaudRate, 115200);
+      state.updateUsbBaudRate(500000);
+
+      expect(state.usbBaudRate, 500000);
+      expect(applied, [500000]);
+
+      // Out-of-range values are clamped.
+      state.updateUsbBaudRate(1);
+      expect(state.usbBaudRate, 1200);
+
+      // Duplicate selection is a no-op (no callback, no notify).
+      var notifications = 0;
+      state.addListener(() => notifications += 1);
+      state.updateUsbBaudRate(1200);
+      expect(notifications, 0);
+
+      state.updateUsbBaudRate(115200);
+      expect(state.usbBaudRate, 115200);
+      expect(applied, [500000, 1200, 115200]);
+
+      state.dispose();
+    });
   });
 
   group('Config connectivity section', () {
@@ -64,8 +92,33 @@ void main() {
       await tester.pump();
 
       expect(find.text('USB PORT SELECT'), findsOneWidget);
+      expect(find.text('USB SERIAL BAUD RATE'), findsOneWidget);
       expect(find.text('MQTT ENDPOINT'), findsOneWidget);
       expect(find.text('AUTO DETECT'), findsOneWidget);
+    });
+
+    testWidgets('changing the baud dropdown updates state', (tester) async {
+      final state = DashboardState();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [dashboardStateProvider.overrideWith((ref) => state)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: ConfigView(p: Palette(false)),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(state.usbBaudRate, 115200);
+      await tester.tap(find.text('115200'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('500000').last);
+      await tester.pumpAndSettle();
+
+      expect(state.usbBaudRate, 500000);
     });
 
     testWidgets('applying an MQTT endpoint updates state', (tester) async {
@@ -85,6 +138,7 @@ void main() {
 
       await tester.enterText(find.widgetWithText(TextField, 'Broker host'), 'pitwall');
       await tester.enterText(find.widgetWithText(TextField, 'Port'), '1884');
+      await tester.ensureVisible(find.text('APPLY'));
       await tester.tap(find.text('APPLY'));
       await tester.pump();
 

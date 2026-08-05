@@ -362,6 +362,53 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                     : 'Pinned to $selected (not currently present; using auto-detect).',
             style: TextStyle(color: p.dimText, fontSize: 10),
           ),
+          const SizedBox(height: 12),
+          Text(
+            'USB SERIAL BAUD RATE',
+            style: TextStyle(
+              color: p.cyan,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 4),
+          DropdownButtonFormField<int>(
+            initialValue: state.usbBaudRate,
+            isExpanded: true,
+            dropdownColor: p.light ? Colors.white : const Color(0xFF181818),
+            style: TextStyle(color: p.mainText, fontSize: 12),
+            decoration: InputDecoration(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 8,
+              ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+              isDense: true,
+            ),
+            items: const [
+              DropdownMenuItem<int>(value: 9600, child: Text('9600')),
+              DropdownMenuItem<int>(value: 19200, child: Text('19200')),
+              DropdownMenuItem<int>(value: 38400, child: Text('38400')),
+              DropdownMenuItem<int>(value: 57600, child: Text('57600')),
+              DropdownMenuItem<int>(value: 115200, child: Text('115200')),
+              DropdownMenuItem<int>(value: 230400, child: Text('230400')),
+              DropdownMenuItem<int>(value: 460800, child: Text('460800')),
+              DropdownMenuItem<int>(value: 500000, child: Text('500000')),
+              DropdownMenuItem<int>(value: 921600, child: Text('921600')),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                state.updateUsbBaudRate(value);
+              }
+            },
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'UART bridges (CP210x/CH340/FTDI) must match firmware baud '
+            '(115200 typical); native ESP32 CDC ignores it.',
+            style: TextStyle(color: p.dimText, fontSize: 10),
+          ),
         ],
       ),
     );

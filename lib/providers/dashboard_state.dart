@@ -545,6 +545,22 @@ class DashboardState extends ChangeNotifier {
     onUsbPortSelectionChanged?.call(value);
   }
 
+  // Serial baud for the USB ingest link. Classic UART bridges (CP210x/CH340/
+  // FTDI WROOM boards) need firmware-matching baud (115200 typical); native
+  // ESP32 USB Serial/JTAG (CDC-ACM) ignores it.
+  int _usbBaudRate = 115200;
+  int get usbBaudRate => _usbBaudRate;
+
+  void Function(int baud)? onUsbBaudRateChanged;
+
+  void updateUsbBaudRate(int value) {
+    final bounded = value.clamp(1200, 4000000);
+    if (_usbBaudRate == bounded) return;
+    _usbBaudRate = bounded;
+    notifyListeners();
+    onUsbBaudRateChanged?.call(bounded);
+  }
+
   // GENERATE NAME (e.g., RUN_20260327_1430)
   String generateDefaultName() {
     final now = DateTime.now();

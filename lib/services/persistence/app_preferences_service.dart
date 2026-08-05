@@ -10,6 +10,7 @@ class AppPreferencesService {
   static const String _kMqttHost = 'prefs.mqtt_host';
   static const String _kMqttPort = 'prefs.mqtt_port';
   static const String _kUsbPortSelection = 'prefs.usb_port_selection';
+  static const String _kUsbBaudRate = 'prefs.usb_baud_rate';
   static const String _kUseLightTheme = 'prefs.use_light_theme';
   static const String _kUseDictionaryAuxDispatch =
       'prefs.use_dictionary_aux_dispatch';
@@ -40,6 +41,7 @@ class AppPreferencesService {
       state.mqttHost,
       state.mqttPort,
       state.usbPortSelection,
+      state.usbBaudRate,
       state.useLightTheme,
       state.useDictionaryAuxDispatch,
       state.crossingDeadzoneMs,
@@ -75,6 +77,11 @@ class AppPreferencesService {
     final usbPortSelection = prefs.getString(_kUsbPortSelection);
     if (usbPortSelection != null && usbPortSelection.isNotEmpty) {
       state.updateUsbPortSelection(usbPortSelection);
+    }
+
+    final usbBaudRate = prefs.getInt(_kUsbBaudRate);
+    if (usbBaudRate != null && usbBaudRate > 0) {
+      state.updateUsbBaudRate(usbBaudRate);
     }
 
     final useLightTheme = prefs.getBool(_kUseLightTheme);
@@ -190,6 +197,7 @@ class AppPreferencesService {
     await prefs.setString(_kMqttHost, state.mqttHost);
     await prefs.setInt(_kMqttPort, state.mqttPort);
     await prefs.setString(_kUsbPortSelection, state.usbPortSelection);
+    await prefs.setInt(_kUsbBaudRate, state.usbBaudRate);
     await prefs.setBool(_kUseLightTheme, state.useLightTheme);
     await prefs.setBool(
       _kUseDictionaryAuxDispatch,

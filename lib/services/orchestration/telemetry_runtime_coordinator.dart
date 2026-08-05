@@ -170,6 +170,7 @@ class TelemetryRuntimeCoordinator {
     state.onUsbTx = _usbService.sendString;
     state.onRequestUsbPortOptions = _usbService.listPortOptions;
     state.onUsbPortSelectionChanged = _usbService.applyPortSelection;
+    state.onUsbBaudRateChanged = _usbService.applyBaudRate;
     state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
     state.onRequestMqttSpoolReset = () => _mqttService.resetSpool();
     state.onRequestLocalStorageClear = () => _localSpoolService.clearAllLocalStorage();
