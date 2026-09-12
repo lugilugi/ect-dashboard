@@ -1,0 +1,288 @@
+VERSION "ECT2026_CAN_V5"
+
+NS_ :
+    NS_DESC_
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+    CAT_DEF_
+    CAT_
+    FILTER
+    BA_DEF_DEF_
+    EV_DATA_
+    ENVVAR_DATA_
+    SGTYPE_
+    SGTYPE_VAL_
+    BA_DEF_SGTYPE_
+    BA_SGTYPE_
+    SIG_TYPE_REF_
+    VAL_TABLE_
+    SIG_GROUP_
+    SIG_VALTYPE_
+    SIGTYPE_VALTYPE_
+    BO_TX_BU_
+    BA_DEF_REL_
+    BA_REL_
+    BA_DEF_DEF_REL_
+    BU_SG_REL_
+    BU_EV_REL_
+    BU_BO_REL_
+    SG_MUL_VAL_
+
+BS_:
+
+BU_: PDLB STER JBOX AUXS LIBO TELE IMC
+
+
+BO_ 272 PEDAL_STATUS: 6 PDLB
+ SG_ throttle_command : 0|15@1+ (1,0) [0|32767] "" IMC
+ SG_ throttle_inhibit : 15|1@1+ (1,0) [0|1] "" IMC
+ SG_ deadman_active : 16|1@1+ (1,0) [0|1] "" IMC
+ SG_ adc_fault : 17|1@1+ (1,0) [0|1] "" IMC
+ SG_ brake_active : 18|1@1+ (1,0) [0|1] "" IMC,LIBO
+ SG_ is_calibrating : 19|1@1+ (1,0) [0|1] "" IMC
+ SG_ inhibit_reason : 20|4@1+ (1,0) [0|15] "" IMC
+ SG_ seq_counter : 24|8@1+ (1,0) [0|255] "" IMC,LIBO
+ SG_ throttle_adc_raw : 32|16@1+ (1,0) [0|65535] "count" IMC
+
+
+BO_ 528 AUX_COMMAND: 1 STER
+ SG_ left_turn : 0|1@1+ (1,0) [0|1] "" LIBO
+ SG_ right_turn : 1|1@1+ (1,0) [0|1] "" LIBO
+ SG_ headlights : 3|1@1+ (1,0) [0|1] "" LIBO
+ SG_ hazards : 4|1@1+ (1,0) [0|1] "" LIBO
+ SG_ horn : 5|1@1+ (1,0) [0|1] "" AUXS
+ SG_ wipers : 6|1@1+ (1,0) [0|1] "" AUXS
+
+
+BO_ 784 PACK_POWER: 4 JBOX
+ SG_ voltage_v : 0|16@1+ (0.003125,0) [0|204.796875] "V" TELE,STER
+ SG_ current_a : 16|16@1- (0.0024,0) [-78.6432|78.6408] "A" TELE,STER
+
+
+BO_ 785 AUX_POWER: 4 JBOX
+ SG_ voltage_v : 0|16@1+ (0.003125,0) [0|204.796875] "V" TELE,STER
+ SG_ current_a : 16|16@1- (0.0012,0) [-39.3216|39.3204] "A" TELE,STER
+
+
+BO_ 786 PACK_ENERGY: 5 JBOX
+ SG_ energy_j : 0|40@1+ (0.00768,0) [0|8444249301.312] "J" STER
+
+
+BO_ 1024 VEHICLE_MOTION: 8 TELE
+ SG_ speed_kmh : 0|16@1+ (0.01,0) [0|655.35] "km/h" STER
+ SG_ trip_distance_m : 16|32@1+ (0.1,0) [0|429496729.5] "m" STER
+ SG_ motion_valid : 48|1@1+ (1,0) [0|1] "" STER
+ SG_ seq_counter : 56|8@1+ (1,0) [0|255] "" STER
+
+
+BO_ 1025 VEHICLE_TIME: 7 TELE
+ SG_ year : 0|8@1+ (1,2000) [2000|2255] "year" STER
+ SG_ month : 8|8@1+ (1,0) [1|12] "" STER
+ SG_ day : 16|8@1+ (1,0) [1|31] "" STER
+ SG_ hour : 24|8@1+ (1,0) [0|23] "" STER
+ SG_ minute : 32|8@1+ (1,0) [0|59] "" STER
+ SG_ second : 40|8@1+ (1,0) [0|59] "" STER
+ SG_ gps_synced : 48|1@1+ (1,0) [0|1] "" STER
+ SG_ rtc_valid : 49|1@1+ (1,0) [0|1] "" STER
+
+
+BO_ 1040 GPS_STATUS: 4 TELE
+ SG_ satellites : 0|8@1+ (1,0) [0|255] "count" STER
+ SG_ fix_valid : 8|1@1+ (1,0) [0|1] "" STER
+ SG_ time_valid : 9|1@1+ (1,0) [0|1] "" STER
+ SG_ position_valid : 10|1@1+ (1,0) [0|1] "" STER
+ SG_ motion_valid : 11|1@1+ (1,0) [0|1] "" STER
+ SG_ seq_counter : 16|8@1+ (1,0) [0|255] "" STER
+
+
+BO_ 1041 GPS_POSITION: 8 TELE
+ SG_ latitude_deg : 0|32@1- (0.0000001,0) [-90|90] "deg" STER
+ SG_ longitude_deg : 32|32@1- (0.0000001,0) [-180|180] "deg" STER
+
+
+BO_ 1042 GPS_MOTION: 4 TELE
+ SG_ gps_speed_kmh : 0|16@1+ (0.01,0) [0|655.35] "km/h" STER
+ SG_ heading_deg : 16|16@1+ (0.01,0) [0|359.99] "deg" STER
+
+
+BO_ 1536 MOTOR_STATE: 8 IMC
+ SG_ motor_speed_rpm : 0|16@1- (1,0) [-32768|32767] "rpm" STER
+ SG_ sequencer_state : 16|8@1+ (1,0) [0|255] "" STER
+ SG_ motor_status : 24|32@1+ (1,0) [0|4294967295] "" STER
+ SG_ seq_counter : 56|8@1+ (1,0) [0|255] "" STER
+
+
+BO_ 1537 MOTOR_CURRENT: 6 IMC
+ SG_ iq_a : 0|16@1- (0.01,0) [-327.68|327.67] "A" STER
+ SG_ id_a : 16|16@1- (0.01,0) [-327.68|327.67] "A" STER
+ SG_ motor_current_a : 32|16@1+ (0.01,0) [0|655.35] "A" STER
+
+
+BO_ 1538 MOTOR_VOLTAGE: 6 IMC
+ SG_ dc_bus_voltage_v : 0|16@1+ (0.01,0) [0|655.35] "V" STER
+ SG_ vq_v : 16|16@1- (0.01,0) [-327.68|327.67] "V" STER
+ SG_ vd_v : 32|16@1- (0.01,0) [-327.68|327.67] "V" STER
+
+
+BO_ 1539 MOTOR_FAULTS: 8 IMC
+ SG_ fault_flags : 0|32@1+ (1,0) [0|4294967295] "" STER
+ SG_ sw_faults : 32|32@1+ (1,0) [0|4294967295] "" STER
+
+
+BO_ 1540 MOTOR_ESTIMATOR: 8 IMC
+ SG_ hall_angle_deg : 0|16@1+ (0.01,0) [0|359.99] "deg" STER
+ SG_ flux_angle_deg : 16|16@1+ (0.01,0) [0|359.99] "deg" STER
+ SG_ hall_speed_rpm : 32|16@1- (1,0) [-32768|32767] "rpm" STER
+ SG_ flux_speed_rpm : 48|16@1- (1,0) [-32768|32767] "rpm" STER
+
+
+BO_ 1541 MOTOR_PHASE_CURRENT: 6 IMC
+ SG_ phase_u_current_a : 0|16@1- (0.01,0) [-327.68|327.67] "A" STER
+ SG_ phase_v_current_a : 16|16@1- (0.01,0) [-327.68|327.67] "A" STER
+ SG_ phase_w_current_a : 32|16@1- (0.01,0) [-327.68|327.67] "A" STER
+
+
+CM_ "ECT2026 vehicle CAN network. Classical CAN, standard 11-bit identifiers, 500 kbit/s.";
+
+CM_ BO_ 272 "PDLB driver-input and propulsion-safety status. Sent every 20 ms. throttle_command is the calibrated 15-bit command and is forced to zero while throttle_inhibit is asserted.";
+
+CM_ BO_ 528 "STER body/auxiliary command. Sent immediately on change and repeated every 100 ms. Bit 2 and bit 7 are reserved. Brake lamps use PEDAL_STATUS.brake_active.";
+
+CM_ BO_ 784 "JBOX main-pack measurement from the INA780 shunt. The monitor is upstream of the propulsion controller and auxiliary converter.";
+
+CM_ BO_ 785 "JBOX auxiliary 12 V rail measurement from the INA740 shunt.";
+
+CM_ BO_ 786 "JBOX main-pack accumulated energy. This frame contains only the INA780 energy accumulator.";
+
+CM_ BO_ 1024 "TELE wheel-derived vehicle speed and trip distance. Distance shall be accumulated from wheel pulses rather than GPS.";
+
+CM_ BO_ 1025 "TELE RTC time. The DS3231 is synchronized from GPS when valid GPS time and date become available.";
+
+CM_ BO_ 1040 "TELE external GPS status. Consumers shall additionally enforce message freshness.";
+
+CM_ BO_ 1041 "TELE external GPS position represented as signed decimal degrees.";
+
+CM_ BO_ 1042 "TELE GPS ground speed and course-over-ground heading.";
+
+CM_ BO_ 1536 "IMC operational state.";
+
+CM_ BO_ 1537 "IMC FOC and RMS-current telemetry. Filtered Iq and Id values should be used when available.";
+
+CM_ BO_ 1538 "IMC DC-link and dq-axis voltage telemetry.";
+
+CM_ BO_ 1539 "IMC raw and software-masked fault bitfields.";
+
+CM_ BO_ 1540 "IMC Hall and flux estimator telemetry. Intended for control validation and Hall-transition diagnostics.";
+
+CM_ BO_ 1541 "IMC instantaneous phase-current telemetry. Diagnostic-only; it does not need to be transmitted during normal race operation.";
+
+CM_ "ID allocation: 0x1xx driver/safety; 0x2xx body/auxiliary commands; 0x3xx electrical power/energy; 0x4xx vehicle motion/navigation; 0x5xx node health/diagnostics; 0x6xx propulsion controller; 0x7xx reserved.";
+
+
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
+BA_DEF_DEF_ "GenMsgCycleTime" 0;
+
+BA_ "GenMsgCycleTime" BO_ 272 20;
+BA_ "GenMsgCycleTime" BO_ 528 100;
+
+BA_ "GenMsgCycleTime" BO_ 784 100;
+BA_ "GenMsgCycleTime" BO_ 785 100;
+BA_ "GenMsgCycleTime" BO_ 786 5000;
+
+BA_ "GenMsgCycleTime" BO_ 1024 100;
+BA_ "GenMsgCycleTime" BO_ 1025 1000;
+BA_ "GenMsgCycleTime" BO_ 1040 1000;
+BA_ "GenMsgCycleTime" BO_ 1041 200;
+BA_ "GenMsgCycleTime" BO_ 1042 200;
+
+BA_ "GenMsgCycleTime" BO_ 1536 50;
+BA_ "GenMsgCycleTime" BO_ 1537 20;
+BA_ "GenMsgCycleTime" BO_ 1538 50;
+BA_ "GenMsgCycleTime" BO_ 1539 100;
+BA_ "GenMsgCycleTime" BO_ 1540 20;
+BA_ "GenMsgCycleTime" BO_ 1541 0;
+
+
+VAL_ 272 throttle_inhibit
+    0 "Enabled"
+    1 "Inhibited";
+
+VAL_ 272 deadman_active
+    0 "Inactive"
+    1 "Active";
+
+VAL_ 272 adc_fault
+    0 "OK"
+    1 "Fault";
+
+VAL_ 272 brake_active
+    0 "Released"
+    1 "Pressed";
+
+VAL_ 272 is_calibrating
+    0 "No"
+    1 "Yes";
+
+VAL_ 272 inhibit_reason
+    0 "NONE"
+    1 "ALERT"
+    2 "BRAKE"
+    3 "DEADMAN"
+    4 "ADC_FAULT"
+    5 "CAN_LINK";
+
+
+VAL_ 528 left_turn
+    0 "Off"
+    1 "On";
+
+VAL_ 528 right_turn
+    0 "Off"
+    1 "On";
+
+VAL_ 528 headlights
+    0 "Off"
+    1 "On";
+
+VAL_ 528 hazards
+    0 "Off"
+    1 "On";
+
+VAL_ 528 horn
+    0 "Off"
+    1 "On";
+
+VAL_ 528 wipers
+    0 "Off"
+    1 "On";
+
+
+VAL_ 1024 motion_valid
+    0 "Invalid"
+    1 "Valid";
+
+VAL_ 1025 gps_synced
+    0 "NotSynced"
+    1 "Synced";
+
+VAL_ 1025 rtc_valid
+    0 "Invalid"
+    1 "Valid";
+
+VAL_ 1040 fix_valid
+    0 "NoFix"
+    1 "ValidFix";
+
+VAL_ 1040 time_valid
+    0 "Invalid"
+    1 "Valid";
+
+VAL_ 1040 position_valid
+    0 "Invalid"
+    1 "Valid";
+
+VAL_ 1040 motion_valid
+    0 "Invalid"
+    1 "Valid";

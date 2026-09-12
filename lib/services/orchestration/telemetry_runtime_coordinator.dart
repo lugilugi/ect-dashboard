@@ -162,9 +162,9 @@ class TelemetryRuntimeCoordinator {
       state,
       _mqttService,
       _gpsSourceManager,
-      _canTxService,
-      _localSpoolService,
-      canIngestRepository,
+      canTxService: _canTxService,
+      localSpoolService: _localSpoolService,
+      canIngestRepository: canIngestRepository,
     );
     state.attachUsbDebugLogStore(_usbService.debugLog);
     state.onUsbTx = _usbService.sendString;
@@ -173,7 +173,8 @@ class TelemetryRuntimeCoordinator {
     state.onUsbBaudRateChanged = _usbService.applyBaudRate;
     state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
     state.onRequestMqttSpoolReset = () => _mqttService.resetSpool();
-    state.onRequestLocalStorageClear = () => _localSpoolService.clearAllLocalStorage();
+    state.onRequestLocalStorageClear = () =>
+        _localSpoolService.clearAllLocalStorage();
 
     state.addListener(_handleStateChanged);
     state.addListener(_handleStatePreferenceSync);

@@ -12,8 +12,8 @@ import 'package:usb_serial/transaction.dart';
 import 'package:usb_serial/usb_serial.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
-import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
-import 'package:telemetry_dashboard/models/telemetry/can_signal_registry.dart';
+import 'package:telemetry_dashboard/models/telemetry/can_bindings.dart';
+import 'package:telemetry_dashboard/models/telemetry/can_decoder.dart';
 
 /// A selectable USB ingest endpoint: Android usb_serial device (id =
 /// deviceName) or desktop serial port name (id = port name like COM5).
@@ -50,8 +50,9 @@ class UsbService {
     'DESKTOP_SERIAL_PORT',
     defaultValue: 'COM3',
   );
-  static const bool hasExplicitDesktopSerialPort =
-      bool.hasEnvironment('DESKTOP_SERIAL_PORT');
+  static const bool hasExplicitDesktopSerialPort = bool.hasEnvironment(
+    'DESKTOP_SERIAL_PORT',
+  );
 
   SerialPort? _desktopPort;
   StreamSubscription<Uint8List>? _desktopSubscription;
@@ -101,33 +102,27 @@ class UsbService {
   double _mockEnergyJ780 = 0.0;
   double _mockSpeedKmh = 0.0;
   double _mockDistanceKm = 0.0;
-  double _mockMcTemp = 40.0;
-  final double _mockBattTemp = 35.0;
   double _mockLatDeg = 14.5660;
   double _mockLonDeg = 120.9920;
   double _mockHeadingDeg = 0.0;
+  int _mockMotionSequence = 0;
+  int _mockGpsSequence = 0;
 
-  int _externalGpsSatellites = 0;
-  bool _externalGpsLocked = false;
-  double? _externalGpsLat;
-  double? _externalGpsLon;
-  double? _externalGpsSpeedKmh;
-  double? _externalGpsHeadingDeg;
-
-  final MqttService mqttService;
-  final GpsSourceManager gpsSourceManager;
   final CanTxService? canTxService;
   final LocalSpoolService? localSpoolService;
   final CanIngestRepository? canIngestRepository;
+  final CanBindings canBindings;
 
   UsbService(
     this.state,
-    this.mqttService,
-    this.gpsSourceManager, [
+    MqttService mqttService,
+    GpsSourceManager gpsSourceManager, {
     this.canTxService,
     this.localSpoolService,
     this.canIngestRepository,
-  ]);
+    CanBindings? bindings,
+  }) : canBindings =
+           bindings ?? CanBindings(state, mqttService, gpsSourceManager);
 
   void sendString(String data) {
     final bytes = Uint8List.fromList(data.codeUnits);
@@ -267,7 +262,7 @@ class UsbService {
           _logThrottled(
             'usb_selected_missing',
             'Selected USB port $selectedName not found; '
-            'falling back to ${_describeUsbDevice(espDevice)}',
+                'falling back to ${_describeUsbDevice(espDevice)}',
           );
         }
       } else {
@@ -276,9 +271,7 @@ class UsbService {
           orElse: () => devices.first,
         );
       }
-      debugLog.info(
-        'Found USB device: ${_describeUsbDevice(espDevice)}',
-      );
+      debugLog.info('Found USB device: ${_describeUsbDevice(espDevice)}');
       _port = await espDevice.create();
 
       if (_port == null) return;
@@ -288,7 +281,7 @@ class UsbService {
         _logThrottled(
           'usb_open_failed',
           'Failed to open USB device '
-          '${espDevice.vid?.toRadixString(16)}:${espDevice.pid?.toRadixString(16)}',
+              '${espDevice.vid?.toRadixString(16)}:${espDevice.pid?.toRadixString(16)}',
         );
         _port = null;
         return;
@@ -371,9 +364,7 @@ class UsbService {
     } catch (e) {
       debugLog.warn('Desktop serial enumeration failed: $e');
     }
-    return [
-      for (final port in ports) UsbPortOption(id: port, label: port),
-    ];
+    return [for (final port in ports) UsbPortOption(id: port, label: port)];
   }
 
   /// Reacts to a user port selection made in Config -> Connectivity (the
@@ -602,17 +593,15 @@ class UsbService {
       String tHex = throttle15bit.toRadixString(16).padLeft(4, '0');
       String tLe = tHex.substring(2, 4) + tHex.substring(0, 2);
       String fHex = flags.toRadixString(16).padLeft(2, '0');
-      _emitSimulatedFrame(CanMsgID.pedal, '$tLe${fHex}000000');
+      _emitSimulatedFrame(CanIds.pedalStatus, '$tLe${fHex}000000');
 
       // 2. PHYSICS ENGINE
       if (braking) {
         _mockSpeedKmh -= 4.0;
         if (_mockSpeedKmh < 0) _mockSpeedKmh = 0;
-        _mockMcTemp -= 0.1;
       } else {
         _mockSpeedKmh += (throttle / 100.0) * 1.5;
         if (_mockSpeedKmh > 160) _mockSpeedKmh = 160;
-        _mockMcTemp += (throttle / 100.0) * 0.15;
       }
       _mockDistanceKm += _mockSpeedKmh * (0.1 / 3600.0);
 
@@ -624,15 +613,27 @@ class UsbService {
         final latRad = _mockLatDeg * pi / 180.0;
         _mockLatDeg += (stepKm * cos(headingRad)) / 110.574;
         _mockLonDeg +=
-            (stepKm * sin(headingRad)) / (111.320 * max(cos(latRad).abs(), 0.2));
+            (stepKm * sin(headingRad)) /
+            (111.320 * max(cos(latRad).abs(), 0.2));
       }
 
-      // --- SEND SPEED/MOTION (0x500) ---
-      int rawSpeed = (_mockSpeedKmh * 1000).toInt();
-      int rawDist = (_mockDistanceKm * 1000).toInt();
-      String sLe = _to32BitLeHex(rawSpeed);
-      String dLe = _to32BitLeHex(rawDist);
-      _emitSimulatedFrame(CanMsgID.hallStat, '$sLe$dLe');
+      // --- SEND VEHICLE MOTION (0x400) ---
+      final motionBytes = Uint8List(8);
+      final motionData = ByteData.sublistView(motionBytes);
+      motionData.setUint16(
+        0,
+        (_mockSpeedKmh / 0.01).round().clamp(0, 65535).toInt(),
+        Endian.little,
+      );
+      motionData.setUint32(
+        2,
+        (_mockDistanceKm * 10000).round().clamp(0, 0xFFFFFFFF).toInt(),
+        Endian.little,
+      );
+      motionBytes[6] = 1; // motion_valid
+      _mockMotionSequence = (_mockMotionSequence + 1) & 0xFF;
+      motionBytes[7] = _mockMotionSequence;
+      _emitSimulatedFrame(CanIds.vehicleMotion, _bytesToHex(motionBytes));
 
       // 3. ELECTRICAL ENGINE
       double volts = 72.0 - (throttle * 0.04);
@@ -650,7 +651,20 @@ class UsbService {
       String pAle =
           (aRaw & 0xFF).toRadixString(16).padLeft(2, '0') +
           ((aRaw >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
-      _emitSimulatedFrame(CanMsgID.pwrMonitor780, '$pVle$pAle');
+      _emitSimulatedFrame(CanIds.packPower, '$pVle$pAle');
+
+      // --- SEND AUXILIARY POWER (0x311) ---
+      const auxVolts = 12.4;
+      const auxAmps = 1.5;
+      final auxVRaw = (auxVolts / 0.003125).round();
+      final auxARaw = (auxAmps / 0.0012).round();
+      final auxVle =
+          (auxVRaw & 0xFF).toRadixString(16).padLeft(2, '0') +
+          ((auxVRaw >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
+      final auxAle =
+          (auxARaw & 0xFF).toRadixString(16).padLeft(2, '0') +
+          ((auxARaw >> 8) & 0xFF).toRadixString(16).padLeft(2, '0');
+      _emitSimulatedFrame(CanIds.auxPower, '$auxVle$auxAle');
 
       // --- SEND ENERGY (0x312) ---
       _mockEnergyJ780 += (volts * amps) * 0.1;
@@ -660,32 +674,17 @@ class UsbService {
       for (int i = 0; i < 5; i++) {
         eLe += ((eRaw >> (i * 8)) & 0xFF).toRadixString(16).padLeft(2, '0');
       }
-      _emitSimulatedFrame(CanMsgID.pwrEnergy, eLe);
-
-      // --- SEND DASH STATUS (0x400) ---
-      final errorCount = braking && _mockSpeedKmh > 40.0 ? 1 : 0;
-      final lastErrorCode = errorCount > 0 ? 0x2A : 0x00;
-      final strategyCode = braking ? 2 : (throttle > 70 ? 1 : 0);
-      final statusFlags = braking ? 0x01 : 0x00;
-      final mcTempRaw = (_mockMcTemp * 10).round().clamp(0, 65535);
-      final battTempRaw = (_mockBattTemp * 10).round().clamp(0, 65535);
-      final dashPayload =
-          '${errorCount.toRadixString(16).padLeft(2, '0')}'
-          '${lastErrorCode.toRadixString(16).padLeft(2, '0')}'
-          '${strategyCode.toRadixString(16).padLeft(2, '0')}'
-          '${statusFlags.toRadixString(16).padLeft(2, '0')}'
-          '${_to16BitLeHex(mcTempRaw)}'
-          '${_to16BitLeHex(battTempRaw)}';
-      _emitSimulatedFrame(CanMsgID.dashStat, dashPayload);
+      _emitSimulatedFrame(CanIds.packEnergy, eLe);
 
       // 4. EXTERNAL GPS FRAMES
       const int mockSatellites = 11;
-      const int mockLockFlags = 0x01;
-      _emitSimulatedFrame(
-        CanMsgID.gpsFix,
-        '${mockSatellites.toRadixString(16).padLeft(2, '0')}'
-        '${mockLockFlags.toRadixString(16).padLeft(2, '0')}',
-      );
+      const int mockStatusFlags = 0x0F;
+      final gpsStatusBytes = Uint8List(4);
+      gpsStatusBytes[0] = mockSatellites;
+      gpsStatusBytes[1] = mockStatusFlags;
+      _mockGpsSequence = (_mockGpsSequence + 1) & 0xFF;
+      gpsStatusBytes[2] = _mockGpsSequence;
+      _emitSimulatedFrame(CanIds.gpsStatus, _bytesToHex(gpsStatusBytes));
 
       final gpsPositionBytes = Uint8List(8);
       final gpsPositionData = ByteData.sublistView(gpsPositionBytes);
@@ -699,34 +698,22 @@ class UsbService {
         (_mockLonDeg * 10000000).round(),
         Endian.little,
       );
-      _emitSimulatedFrame(CanMsgID.gpsPosition, _bytesToHex(gpsPositionBytes));
+      _emitSimulatedFrame(CanIds.gpsPosition, _bytesToHex(gpsPositionBytes));
 
       final gpsMotionBytes = Uint8List(4);
       final gpsMotionData = ByteData.sublistView(gpsMotionBytes);
       gpsMotionData.setUint16(
         0,
-        (_mockSpeedKmh / 0.036).round().clamp(0, 65535),
+        (_mockSpeedKmh / 0.01).round().clamp(0, 65535).toInt(),
         Endian.little,
       );
       gpsMotionData.setUint16(
         2,
-        ((_mockHeadingDeg % 360.0) * 100).round().clamp(0, 35999),
+        ((_mockHeadingDeg % 360.0) * 100).round().clamp(0, 35999).toInt(),
         Endian.little,
       );
-      _emitSimulatedFrame(CanMsgID.gpsMotion, _bytesToHex(gpsMotionBytes));
+      _emitSimulatedFrame(CanIds.gpsMotion, _bytesToHex(gpsMotionBytes));
     });
-  }
-
-  String _to16BitLeHex(int value) {
-    final b = Uint8List(2)
-      ..buffer.asByteData().setUint16(0, value, Endian.little);
-    return b.map((e) => e.toRadixString(16).padLeft(2, '0')).join('');
-  }
-
-  String _to32BitLeHex(int value) {
-    Uint8List b = Uint8List(4)
-      ..buffer.asByteData().setUint32(0, value, Endian.little);
-    return b.map((e) => e.toRadixString(16).padLeft(2, '0')).join('');
   }
 
   void _emitSimulatedFrame(int id, String payloadHex) {
@@ -753,9 +740,7 @@ class UsbService {
         '(${_lineBuffer.length} bytes buffered).',
       );
       final keepFrom = _lineBuffer.lastIndexOf('\n') + 1;
-      _lineBuffer = keepFrom > 0
-          ? _lineBuffer.substring(keepFrom)
-          : '';
+      _lineBuffer = keepFrom > 0 ? _lineBuffer.substring(keepFrom) : '';
     }
     int newlineIndex;
     while ((newlineIndex = _lineBuffer.indexOf('\n')) != -1) {
@@ -858,14 +843,21 @@ class UsbService {
   }
 
   void _handleParsedCanFrame(CanFrameMessage frame) {
-    state.updateRawCan(
-      frame.canId,
-      frame.payloadHex,
-      source: frame.source,
-    );
+    state.updateRawCan(frame.canId, frame.payloadHex, source: frame.source);
 
     final payloadBytes = _hexToBytes(frame.payloadHex);
-    _dispatchPayload(frame.canId, payloadBytes);
+    try {
+      final decoded = decodeCanFrame(frame.canId, payloadBytes);
+      if (decoded == null) {
+        return;
+      }
+      canBindings.handle(decoded, receivedAtUtc: frame.receivedAtUtc);
+    } on CanDecodeException catch (error) {
+      debugLog.warn(
+        'CAN decode error [${error.message}] id=0x${frame.canId.toRadixString(16)} '
+        'payload=${frame.payloadHex}',
+      );
+    }
   }
 
   String _resolveIngestSource() {
@@ -880,148 +872,5 @@ class UsbService {
       }
     }
     return Uint8List.fromList(bytes);
-  }
-
-  void _dispatchPayload(int id, Uint8List payloadBytes) {
-    switch (id) {
-      case CanMsgID.pedal:
-        final pedal = PedalPayload.fromBytes(payloadBytes);
-        state.updatePedal(pedal);
-
-        // Instantly publish to the cloud!
-        _publishSignals(id, {
-          "Throttle_Percent": pedal.throttlePercent,
-          "Brake_Active": pedal.isBrakePressed ? 1.0 : 0.0,
-        });
-        break;
-
-      case CanMsgID.auxCtrl:
-        state.updateAux(AuxControlPayload.fromBytes(payloadBytes));
-        break;
-
-      case CanMsgID.pwrMonitor780:
-      case CanMsgID.pwrMonitor740:
-        final power = PowerPayload.fromBytes(payloadBytes);
-        state.updatePower(power, id);
-
-        // We separate 780 and 740 metrics for Grafana
-        String suffix = (id == CanMsgID.pwrMonitor780) ? "_780" : "_740";
-        _publishSignals(id, {
-          "Voltage$suffix": power.voltage,
-          "Current$suffix": power.current780,
-        });
-        break;
-
-      case CanMsgID.pwrEnergy:
-        final energy = EnergyPayload.fromBytes(payloadBytes);
-        state.updateEnergy(energy);
-
-        _publishSignals(id, {
-          "Joules_780": energy.joules780,
-          "Joules_740": energy.joules740,
-        });
-        break;
-
-      case CanMsgID.dashStat:
-        final dashStatus = DashStatusPayload.fromBytes(payloadBytes);
-        state.updateDashStatus(dashStatus);
-
-        _publishSignals(id, {
-          'Error_Count': dashStatus.errorCount.toDouble(),
-          'MC_Temp_C': dashStatus.mcTempC,
-          'Batt_Temp_C': dashStatus.battTempC,
-        });
-        break;
-
-      case CanMsgID.hallStat:
-        final hall = HallPayload.fromBytes(payloadBytes);
-        state.updateMotion(hall.speed, hall.totalDist, state.lapNumber);
-
-        _publishSignals(id, {
-          "Speed_Kmh": hall.speed,
-          "Distance_Km": hall.totalDist,
-        });
-        break;
-
-      case CanMsgID.gpsFix:
-        final fix = ExternalGpsFixPayload.fromBytes(payloadBytes);
-        _externalGpsSatellites = fix.satellites;
-        _externalGpsLocked = fix.isLocked;
-        gpsSourceManager.markExternalHeartbeat();
-        _tryEmitExternalGpsSample();
-
-        _publishSignals(id, {
-          'GPS_Satellites': fix.satellites.toDouble(),
-          'GPS_Locked': fix.isLocked ? 1.0 : 0.0,
-          'GPS_Fallback_Active': 0.0,
-          'GPS_Fallback_Period_Ms': state.gpsFallbackPeriodMs.toDouble(),
-        });
-        break;
-
-      case CanMsgID.gpsPosition:
-        final position = ExternalGpsPositionPayload.fromBytes(payloadBytes);
-        _externalGpsLat = position.latitude;
-        _externalGpsLon = position.longitude;
-        gpsSourceManager.markExternalHeartbeat();
-        _tryEmitExternalGpsSample();
-
-        _publishSignals(id, {
-          'GPS_Latitude_Deg': position.latitude,
-          'GPS_Longitude_Deg': position.longitude,
-        });
-        break;
-
-      case CanMsgID.gpsMotion:
-        final motion = ExternalGpsMotionPayload.fromBytes(payloadBytes);
-        _externalGpsSpeedKmh = motion.speedKmh;
-        _externalGpsHeadingDeg = motion.headingDeg;
-        gpsSourceManager.markExternalHeartbeat();
-        _tryEmitExternalGpsSample();
-
-        _publishSignals(id, {
-          'GPS_Speed_Kmh': motion.speedKmh,
-          'GPS_Heading_Deg': motion.headingDeg,
-        });
-        break;
-    }
-  }
-
-  /// Publishes each signal defined in the [canSignalRegistry] for [canId].
-  /// Add/remove signals by editing the registry (see can_signal_registry.dart).
-  void _publishSignals(int canId, Map<String, double> values) {
-    for (final entry in values.entries) {
-      final spec = canSignalSpecByName(entry.key);
-      if (spec == null) {
-        continue;
-      }
-      mqttService.publish(
-        spec.signalName,
-        entry.value,
-        source: spec.source,
-        unit: spec.unit,
-        canId: canId,
-      );
-    }
-  }
-
-  void _tryEmitExternalGpsSample() {
-    final lat = _externalGpsLat;
-    final lon = _externalGpsLon;
-    final speed = _externalGpsSpeedKmh;
-    final heading = _externalGpsHeadingDeg;
-
-    if (lat == null || lon == null || speed == null || heading == null) {
-      return;
-    }
-
-    gpsSourceManager.ingestExternalSample(
-      satellites: _externalGpsSatellites,
-      locked: _externalGpsLocked,
-      lat: lat,
-      lon: lon,
-      headingDeg: heading,
-      speedKmh: speed,
-      timestampUtc: DateTime.now().toUtc(),
-    );
   }
 }

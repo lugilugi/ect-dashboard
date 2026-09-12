@@ -57,7 +57,7 @@ void main() {
         tsWallUtc: DateTime.utc(2026, 4, 16, 8, 15, 30, 120),
         tsSessionMs: 45678,
         source: 'external_gps',
-        canId: 0x500,
+        canId: 0x412,
         seqInSession: 990,
         qualityFlag: 'ok',
         receivedAtUsMono: 123456789,

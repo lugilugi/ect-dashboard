@@ -15,8 +15,8 @@ Grafana). Repo root is a Flutter app; backend lives under `ops/` and `db/`.
 
 - Ingest: `lib/services/ingest/usb_service.dart`. Android uses `usb_serial` and picks Espressif native USB (VID 0x303A) or ESP32 WROOM bridge chips (CP210x 0x10C4, CH340 0x1A86, FTDI 0x0403), else the first device. Desktops use `flutter_libserialport`: explicit dart-define wins, otherwise `SerialPort.availablePorts` is auto-tried (ttyACM → ttyUSB → others). Port choice precedence: Config → Connectivity → USB PORT SELECT (persisted in prefs) > `--dart-define=DESKTOP_SERIAL_PORT=COM5` > auto-detect. ESP32-C3 USB Serial/JTAG ignores baud; classic UART bridges need firmware-matching baud (115200).
 - MQTT endpoint (host + port) is editable in Config → Connectivity → MQTT ENDPOINT; host/port live on `DashboardState` (`mqttHost`/`mqttPort`, persisted) and `MqttService` rebuilds its transport + reconnects on change (`_reconnectWithNewEndpoint`).
-- Input format is candump lines: `can0 <id>#<hexpayload>` (newline-delimited). `CanIngestRepository` parses in an isolate; `_dispatchPayload` in `usb_service.dart` decodes and publishes.
-- **Adding a CAN signal**: edit `lib/models/telemetry/can_signal_registry.dart` (single source of truth, CamelCase + unit suffix, e.g. `Speed_Kmh`) AND add the value in the matching `_dispatchPayload` case. No backend/schema changes needed (EAV sink).
+- Input format is candump lines: `can0 <id>#<hexpayload>` (newline-delimited). `CanIngestRepository` parses in an isolate; `can_decoder.dart` decodes the generated DBC catalog and `CanBindings` maps protocol signals to app state and MQTT metrics.
+- **Adding a CAN signal**: edit `dbc/network.dbc`, run `python tools/generate_can_dart.py`, then add the app/MQTT mapping in `lib/models/telemetry/can_bindings.dart` if it should be published. Commit both the DBC and generated Dart file; normal Flutter builds do not require Python. No backend/schema changes are needed (EAV sink).
 - `lib/services/orchestration/telemetry_runtime_coordinator.dart` constructs every service; `DashboardState` (`lib/providers/dashboard_state.dart`) is a big ChangeNotifier whose UI-observable stores (spool health, USB debug log) are attached via `attach*Store(...)` — copy that pattern for new service state.
 - USB debug log: `UsbDebugLogStore` (bounded ring buffer, throttled by UsbService — RX stats every 5 s, connect failures deduped) → Config → Connectivity → "USB DEBUG LOG".
 - MQTT: sparse JSON batch of changed values to `telemetry/eco_archers/events`; session upsert to `.../sessions`. `ts_wall_utc` is the metric timestamp, so outage replays keep original timing. Local spool replays after broker outages (see `local_spool_service.dart`, `mqtt_service.dart`).
@@ -33,7 +33,7 @@ Grafana). Repo root is a Flutter app; backend lives under `ops/` and `db/`.
 
 ## Tests
 
-- `test/` is per-service unit/widget suites; 77 tests, no backend or hardware required. `flutter test` needs no special flags. New service logic should get a matching suite (see `test/can_tx_service_test.dart`, `test/mqtt_replay_outage_test.dart` for style).
+- `test/` contains per-service unit/widget suites; no backend or hardware is required. `flutter test` needs no special flags. New service logic should get a matching suite (see `test/can_tx_service_test.dart`, `test/mqtt_replay_outage_test.dart` for style).
 
 ## Environment quirks
 

@@ -9,12 +9,13 @@ import 'package:latlong2/latlong.dart' hide Path;
 import 'package:telemetry_dashboard/providers/app_providers.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
-import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
+import 'package:telemetry_dashboard/models/telemetry/can_dictionary.dart';
 import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 import 'package:telemetry_dashboard/ui/widgets/common/map_markers.dart';
 import 'package:telemetry_dashboard/ui/widgets/common/map_tiles.dart';
+
 enum ConfigSection {
   connectivity,
   canDictionary,
@@ -33,7 +34,8 @@ class ConfigView extends ConsumerStatefulWidget {
   ConsumerState<ConfigView> createState() => ConfigViewState();
 }
 
-class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderStateMixin {
+class ConfigViewState extends ConsumerState<ConfigView>
+    with TickerProviderStateMixin {
   ConfigSection _selectedSection = ConfigSection.connectivity;
   final TextEditingController _canSearchController = TextEditingController();
   final MapController _geofenceMapController = MapController();
@@ -57,8 +59,8 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
 
   TextEditingController get _hostController =>
       _mqttHostController ??= TextEditingController(text: state.mqttHost);
-  TextEditingController get _portController =>
-      _mqttPortController ??= TextEditingController(text: state.mqttPort.toString());
+  TextEditingController get _portController => _mqttPortController ??=
+      TextEditingController(text: state.mqttPort.toString());
 
   @override
   void dispose() {
@@ -239,9 +241,7 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                   builder: (context, _, _) => _infoRow(
                     'CAN IDs',
                     '${state.lastCanPayloads.length} active',
-                    valueColor: state.lastCanPayloads.isEmpty
-                        ? p.red
-                        : p.green,
+                    valueColor: state.lastCanPayloads.isEmpty ? p.red : p.green,
                   ),
                 ),
                 _infoRow(
@@ -334,7 +334,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                 horizontal: 10,
                 vertical: 8,
               ),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
               isDense: true,
             ),
             items: [
@@ -360,8 +362,8 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
             selected.isEmpty
                 ? 'Auto-detect: prefers native ESP32 USB, then WROOM bridges (CP210x/CH340/FTDI).'
                 : selectedInList
-                    ? 'Pinned to $selected. Unplug to fall back to auto-detect.'
-                    : 'Pinned to $selected (not currently present; using auto-detect).',
+                ? 'Pinned to $selected. Unplug to fall back to auto-detect.'
+                : 'Pinned to $selected (not currently present; using auto-detect).',
             style: TextStyle(color: p.dimText, fontSize: 10),
           ),
           const SizedBox(height: 12),
@@ -385,7 +387,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                 horizontal: 10,
                 vertical: 8,
               ),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
               isDense: true,
             ),
             items: const [
@@ -478,18 +482,18 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                   decoration: InputDecoration(
                     labelText: 'Port',
                     labelStyle: TextStyle(color: p.dimText, fontSize: 11),
-                    prefixIcon: Icon(Icons.numbers_rounded, color: p.dimText, size: 16),
+                    prefixIcon: Icon(
+                      Icons.numbers_rounded,
+                      color: p.dimText,
+                      size: 16,
+                    ),
                     isDense: true,
                   ),
                   onSubmitted: (_) => _applyMqttEndpoint(),
                 ),
               ),
               const SizedBox(width: 8),
-              _buildCmdBtn(
-                'APPLY',
-                _applyMqttEndpoint,
-                compact: true,
-              ),
+              _buildCmdBtn('APPLY', _applyMqttEndpoint, compact: true),
             ],
           ),
           const SizedBox(height: 6),
@@ -509,7 +513,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
     final port = int.tryParse(portText);
     if (host.isEmpty || port == null || port < 1 || port > 65535) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid MQTT endpoint (host + port 1-65535).')),
+        const SnackBar(
+          content: Text('Invalid MQTT endpoint (host + port 1-65535).'),
+        ),
       );
       return;
     }
@@ -517,7 +523,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
     state.updateMqttHost(host);
     state.updateMqttPort(port);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('MQTT endpoint set to $host:$port. Reconnecting...')),
+      SnackBar(
+        content: Text('MQTT endpoint set to $host:$port. Reconnecting...'),
+      ),
     );
   }
 
@@ -578,13 +586,18 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                         UsbDebugLevel.warn => p.amber,
                         UsbDebugLevel.error => p.red,
                       };
-                      final hh = entry.atUtc.toLocal().hour
+                      final hh = entry.atUtc.toLocal().hour.toString().padLeft(
+                        2,
+                        '0',
+                      );
+                      final mm = entry.atUtc
+                          .toLocal()
+                          .minute
                           .toString()
                           .padLeft(2, '0');
-                      final mm = entry.atUtc.toLocal().minute
-                          .toString()
-                          .padLeft(2, '0');
-                      final ss = entry.atUtc.toLocal().second
+                      final ss = entry.atUtc
+                          .toLocal()
+                          .second
                           .toString()
                           .padLeft(2, '0');
                       return Padding(
@@ -728,9 +741,7 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 border: Border.all(color: p.border),
-                color: p.light
-                    ? Colors.grey.shade100
-                    : const Color(0xFF101010),
+                color: p.light ? Colors.grey.shade100 : const Color(0xFF101010),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: sortedEntries.isEmpty
@@ -790,7 +801,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        '${entry.direction} | DLC ${entry.expectedDlc} | key: ${entry.key}',
+                                        '${entry.direction} | DLC ${entry.expectedDlc} | '
+                                        'cycle ${entry.cycleTimeMs ?? 'n/a'} ms | '
+                                        'key: ${entry.key}',
                                         style: TextStyle(
                                           color: p.dimText,
                                           fontFamily: 'monospace',
@@ -805,10 +818,7 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                             const SizedBox(height: 4),
                             Text(
                               entry.decodeNotes,
-                              style: TextStyle(
-                                color: p.dimText,
-                                fontSize: 10,
-                              ),
+                              style: TextStyle(color: p.dimText, fontSize: 10),
                             ),
                           ],
                         );
@@ -857,9 +867,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                 final sorted = List<CanLogEntry>.from(entries);
                 if (_canSortByName) {
                   sorted.sort((a, b) {
-                    final cmp = _canLabel(a.canId)
-                        .toLowerCase()
-                        .compareTo(_canLabel(b.canId).toLowerCase());
+                    final cmp = _canLabel(
+                      a.canId,
+                    ).toLowerCase().compareTo(_canLabel(b.canId).toLowerCase());
                     return cmp != 0 ? cmp : a.canId.compareTo(b.canId);
                   });
                 } else {
@@ -882,13 +892,9 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                             ),
                           ),
                         ),
-                        _buildCmdBtn(
-                          'CLEAR LOG',
-                          () {
-                            state.clearCanLog();
-                          },
-                          compact: true,
-                        ),
+                        _buildCmdBtn('CLEAR LOG', () {
+                          state.clearCanLog();
+                        }, compact: true),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -933,14 +939,13 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
                                             vertical: 2,
                                           ),
                                           decoration: BoxDecoration(
-                                            border: Border.all(
-                                              color: p.border,
-                                            ),
+                                            border: Border.all(color: p.border),
                                             color: p.light
                                                 ? Colors.white
                                                 : const Color(0xFF181818),
-                                            borderRadius:
-                                                BorderRadius.circular(4),
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
                                           ),
                                           child: Text(
                                             _canHexId(entry.canId),
@@ -1043,9 +1048,7 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: active ? p.cyan : p.border),
-          color: active
-              ? p.cyan.withValues(alpha: 0.12)
-              : Colors.transparent,
+          color: active ? p.cyan.withValues(alpha: 0.12) : Colors.transparent,
         ),
         child: Text(
           label,
@@ -1081,15 +1084,12 @@ class ConfigViewState extends ConsumerState<ConfigView> with TickerProviderState
         '${three(local.millisecond)}';
   }
 
-Widget _buildGeofenceEditorCard(BuildContext context) {
+  Widget _buildGeofenceEditorCard(BuildContext context) {
     _ensureGeofenceDraftInitialized();
 
     final center = _resolveGeofenceMapCenter();
     final hasDraft = _draftGeofenceStart != null && _draftGeofenceEnd != null;
-    final polylinePoints = <LatLng>[
-      ?_draftGeofenceStart,
-      ?_draftGeofenceEnd,
-    ];
+    final polylinePoints = <LatLng>[?_draftGeofenceStart, ?_draftGeofenceEnd];
 
     // Smart Auto-Centering on GPS Lock
     final hasGps = state.gpsLocked && state.hasCurrentGpsSample;
@@ -1168,7 +1168,10 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                           CircleLayer(
                             circles: [
                               CircleMarker(
-                                point: LatLng(state.currentGpsLat!, state.currentGpsLon!),
+                                point: LatLng(
+                                  state.currentGpsLat!,
+                                  state.currentGpsLon!,
+                                ),
                                 radius: state.phoneGpsAccuracyM ?? 10.0,
                                 useRadiusInMeter: true,
                                 color: p.cyan.withValues(alpha: 0.12),
@@ -1184,7 +1187,9 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                                 points: polylinePoints,
                                 strokeWidth: 4.0,
                                 color: p.cyan,
-                                borderColor: Colors.white.withValues(alpha: 0.8),
+                                borderColor: Colors.white.withValues(
+                                  alpha: 0.8,
+                                ),
                                 borderStrokeWidth: 1.0,
                               ),
                             ],
@@ -1208,7 +1213,9 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                                 ],
                                 strokeWidth: 7.0,
                                 color: p.amber,
-                                borderColor: Colors.black.withValues(alpha: 0.65),
+                                borderColor: Colors.black.withValues(
+                                  alpha: 0.65,
+                                ),
                                 borderStrokeWidth: 2.0,
                               ),
                             ],
@@ -1217,7 +1224,10 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                           markers: [
                             if (state.hasCurrentGpsSample)
                               Marker(
-                                point: LatLng(state.currentGpsLat!, state.currentGpsLon!),
+                                point: LatLng(
+                                  state.currentGpsLat!,
+                                  state.currentGpsLon!,
+                                ),
                                 width: 28,
                                 height: 28,
                                 child: const PulsingUserLocationMarker(),
@@ -1254,11 +1264,7 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
                       left: 10,
                       child: _buildScaleIndicator(),
                     ),
-                    Positioned(
-                      top: 10,
-                      right: 10,
-                      child: _buildMapFabStack(),
-                    ),
+                    Positioned(top: 10, right: 10, child: _buildMapFabStack()),
                     _buildGpsWaitingOverlay(),
                   ],
                 ),
@@ -1280,9 +1286,7 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
             state.lapCrossings.isEmpty
                 ? 'NONE'
                 : '${state.lapCrossings.length} (LAP ${state.lapCrossings.last.lapNumber})',
-            valueColor: state.lapCrossings.isEmpty
-                ? p.dimText
-                : p.lightGreen,
+            valueColor: state.lapCrossings.isEmpty ? p.dimText : p.lightGreen,
           ),
           _infoRow(
             'CURRENT GPS',
@@ -1653,10 +1657,23 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
     final lat = camera.center.latitude;
     final zoom = camera.zoom;
 
-    final metersPerPixel = (156543.03392 * cos(lat * pi / 180.0)) / pow(2.0, zoom);
+    final metersPerPixel =
+        (156543.03392 * cos(lat * pi / 180.0)) / pow(2.0, zoom);
 
     const distances = [
-      1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000
+      1,
+      2,
+      5,
+      10,
+      20,
+      50,
+      100,
+      200,
+      500,
+      1000,
+      2000,
+      5000,
+      10000,
     ];
 
     double bestDistance = 50.0;
@@ -1767,7 +1784,8 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
   }
 
   Widget _buildGpsWaitingOverlay() {
-    final showOverlay = !state.gpsLocked &&
+    final showOverlay =
+        !state.gpsLocked &&
         _draftGeofenceStart == null &&
         _draftGeofenceEnd == null &&
         !_dismissGpsWaitingOverlay;
@@ -1785,10 +1803,7 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
             SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: p.cyan,
-              ),
+              child: CircularProgressIndicator(strokeWidth: 2, color: p.cyan),
             ),
             const SizedBox(height: 12),
             Text(
@@ -1808,7 +1823,10 @@ Widget _buildGeofenceEditorCard(BuildContext context) {
               },
               borderRadius: BorderRadius.circular(6),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   border: Border.all(color: p.border),
                   borderRadius: BorderRadius.circular(6),
@@ -3064,7 +3082,8 @@ class _AlertVariableRowState extends State<_AlertVariableRow> {
     final spec = widget.spec;
     final settings = _settings;
     final liveValue = widget.state.alertVariableValue(spec.key);
-    final isViolating = settings.enabled &&
+    final isViolating =
+        settings.enabled &&
         (liveValue < settings.minThreshold ||
             liveValue > settings.maxThreshold);
 
@@ -3216,8 +3235,3 @@ class _AlertVariableRowState extends State<_AlertVariableRow> {
     );
   }
 }
-
-
-
-
-

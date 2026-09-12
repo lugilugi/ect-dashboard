@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'dart:collection';
 import 'dart:async';
 import 'dart:math';
-import 'package:telemetry_dashboard/models/telemetry/can_messages.dart';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
@@ -50,7 +49,8 @@ class CanLogEntry {
   int get dlc => payloadHex.length ~/ 2;
 }
 
-class _SessionTicker {  final SessionControlStore _sessionControl;
+class _SessionTicker {
+  final SessionControlStore _sessionControl;
   final VoidCallback _onTick;
 
   Timer? _timer;
@@ -149,6 +149,7 @@ class TelemetryMetricsStore {
   // Power & Environment
   double mainVoltage = 0.0;
   double current780 = 0.0;
+  double current740 = 0.0;
   double mcTempC = 0.0;
   double battTempC = 0.0;
 
@@ -287,7 +288,6 @@ class DashboardState extends ChangeNotifier {
   final LapBoundaryService _lapBoundaryService =
       LapBoundaryService.defaultConfig();
 
-
   String? startBlockReason;
   String? endBlockReason;
   String? lastCrossingReason;
@@ -311,15 +311,13 @@ class DashboardState extends ChangeNotifier {
   static const double _gpsTrackMinStepM = 2.0;
   final List<GeoPoint> _gpsTrack = <GeoPoint>[];
 
-  List<GeoPoint> get gpsTrackPoints =>
-      List<GeoPoint>.unmodifiable(_gpsTrack);
+  List<GeoPoint> get gpsTrackPoints => List<GeoPoint>.unmodifiable(_gpsTrack);
 
   void _appendGpsTrackPoint({required double lat, required double lon}) {
     final point = GeoPoint(lat: lat, lon: lon);
     if (_gpsTrack.isNotEmpty) {
       final last = _gpsTrack.last;
-      if (_distanceMeters(last.lat, last.lon, lat, lon) <
-          _gpsTrackMinStepM) {
+      if (_distanceMeters(last.lat, last.lon, lat, lon) < _gpsTrackMinStepM) {
         return;
       }
     }
@@ -333,7 +331,8 @@ class DashboardState extends ChangeNotifier {
     const earthRadiusM = 6371000.0;
     final dLat = (lat2 - lat1) * pi / 180.0;
     final dLon = (lon2 - lon1) * pi / 180.0;
-    final a = dLat * dLat +
+    final a =
+        dLat * dLat +
         cos(lat1 * pi / 180.0) * cos(lat2 * pi / 180.0) * dLon * dLon;
     return earthRadiusM * sqrt(a);
   }
@@ -520,9 +519,7 @@ class DashboardState extends ChangeNotifier {
     endBlockReason = null;
     _applySessionControlState(snapshot.controlState);
     _lapBoundaryService.resetTracking();
-    _lapBoundaryService.setDeadzone(
-      Duration(milliseconds: crossingDeadzoneMs),
-    );
+    _lapBoundaryService.setDeadzone(Duration(milliseconds: crossingDeadzoneMs));
 
     notifyListeners();
   }
@@ -607,9 +604,7 @@ class DashboardState extends ChangeNotifier {
     _sessionId = const Uuid().v4();
     _sessionName = resolvedName;
 
-    final armedControl = _sessionOrchestrator.arm(
-      control: sessionControlState,
-    );
+    final armedControl = _sessionOrchestrator.arm(control: sessionControlState);
     _applySessionControlState(armedControl);
 
     final decision = _sessionOrchestrator.requestStart(
@@ -687,9 +682,7 @@ class DashboardState extends ChangeNotifier {
       return;
     }
     crossingDeadzoneMs = bounded;
-    _lapBoundaryService.setDeadzone(
-      Duration(milliseconds: crossingDeadzoneMs),
-    );
+    _lapBoundaryService.setDeadzone(Duration(milliseconds: crossingDeadzoneMs));
     if (crossingDeadzoneRemainingMs > crossingDeadzoneMs) {
       crossingDeadzoneRemainingMs = crossingDeadzoneMs;
     }
@@ -761,9 +754,7 @@ class DashboardState extends ChangeNotifier {
 
   void configureLapBoundary({required GeoPoint start, required GeoPoint end}) {
     _lapBoundaryService.setFinishLine(start: start, end: end);
-    _lapBoundaryService.setDeadzone(
-      Duration(milliseconds: crossingDeadzoneMs),
-    );
+    _lapBoundaryService.setDeadzone(Duration(milliseconds: crossingDeadzoneMs));
     _lapBoundaryConfigured = true;
     notifyListeners();
   }
@@ -878,6 +869,8 @@ class DashboardState extends ChangeNotifier {
   set mainVoltage(double value) => _metrics.mainVoltage = value;
   double get current780 => _metrics.current780;
   set current780(double value) => _metrics.current780 = value;
+  double get current740 => _metrics.current740;
+  set current740(double value) => _metrics.current740 = value;
   double get mcTempC => _metrics.mcTempC;
   set mcTempC(double value) => _metrics.mcTempC = value;
   double get battTempC => _metrics.battTempC;
@@ -943,7 +936,8 @@ class DashboardState extends ChangeNotifier {
   int get alertCriticalRepeatCount => _alerts.alertCriticalRepeatCount;
   set alertCriticalRepeatCount(int value) =>
       _alerts.alertCriticalRepeatCount = value;
-  int get alertCriticalRepeatIntervalMs => _alerts.alertCriticalRepeatIntervalMs;
+  int get alertCriticalRepeatIntervalMs =>
+      _alerts.alertCriticalRepeatIntervalMs;
   set alertCriticalRepeatIntervalMs(int value) =>
       _alerts.alertCriticalRepeatIntervalMs = value;
   String get lastAlertCode => _alerts.lastAlertCode;
@@ -1125,12 +1119,14 @@ class DashboardState extends ChangeNotifier {
     _gps.lastKnownLat = value;
     notifyListeners();
   }
+
   double? get lastKnownLon => _gps.lastKnownLon;
   set lastKnownLon(double? value) {
     if (_gps.lastKnownLon == value) return;
     _gps.lastKnownLon = value;
     notifyListeners();
   }
+
   DateTime get _lastExternalGpsMessageAt => _gps.lastExternalGpsMessageAt;
   set _lastExternalGpsMessageAt(DateTime value) =>
       _gps.lastExternalGpsMessageAt = value;
@@ -1338,6 +1334,7 @@ class DashboardState extends ChangeNotifier {
     isBrakePressed = false;
     mainVoltage = 0;
     current780 = 0;
+    current740 = 0;
     mcTempC = 0.0;
     battTempC = 0.0;
     energyJ780 = 0;
@@ -1694,15 +1691,6 @@ class DashboardState extends ChangeNotifier {
     return true;
   }
 
-  void updateDashStatus(DashStatusPayload payload) {
-    errorCount = payload.errorCount;
-    lastErrorCode = payload.lastErrorCode;
-    strategy = payload.strategy;
-    mcTempC = payload.mcTempC;
-    battTempC = payload.battTempC;
-    notifyListeners();
-  }
-
   @visibleForTesting
   void updateErrorCode(String code) {
     lastErrorCode = code;
@@ -1792,33 +1780,70 @@ class DashboardState extends ChangeNotifier {
     }
   }
 
-  void updatePedal(PedalPayload payload) {
-    throttlePercent = payload.throttlePercent;
-    isBrakePressed = payload.isBrakePressed;
+  void updatePedal({
+    required double throttlePercent,
+    required bool isBrakePressed,
+  }) {
+    this.throttlePercent = throttlePercent;
+    this.isBrakePressed = isBrakePressed;
     notifyListeners();
   }
 
-  void updateAux(AuxControlPayload payload) {
-    leftTurn = payload.leftTurn;
-    rightTurn = payload.rightTurn;
-    headlights = payload.headlights;
-    hazards = payload.hazards;
-    horn = payload.horn;
-    wipers = payload.wipers;
+  void updateAux({
+    required bool leftTurn,
+    required bool rightTurn,
+    required bool headlights,
+    required bool hazards,
+    required bool horn,
+    required bool wipers,
+  }) {
+    this.leftTurn = leftTurn;
+    this.rightTurn = rightTurn;
+    this.headlights = headlights;
+    this.hazards = hazards;
+    this.horn = horn;
+    this.wipers = wipers;
     notifyListeners();
   }
 
-  void updatePower(PowerPayload payload, int id) {
-    mainVoltage = payload.voltage;
-    if (id == CanMsgID.pwrMonitor780) {
-      current780 = payload.current780;
-    }
+  void updatePackPower({required double voltage, required double current}) {
+    mainVoltage = voltage;
+    current780 = current;
     _updateEfficiency();
     notifyListeners();
   }
 
-  void updateEnergy(EnergyPayload payload) {
-    energyJ780 = payload.joules780;
+  void updateAuxPower({required double voltage, required double current}) {
+    bus12V = voltage;
+    current740 = current;
+    notifyListeners();
+  }
+
+  void updateEnergy(double joules) {
+    energyJ780 = joules;
+    notifyListeners();
+  }
+
+  /// Projects the DBC fault bitfields into the existing application fault
+  /// model without pretending the DBC provides an error count or named codes.
+  void updateMotorFaults({
+    required int faultFlags,
+    required int softwareFaults,
+  }) {
+    final faults = <String>[];
+    if (faultFlags != 0) {
+      faults.add(
+        'FAULT_FLAGS:0x${faultFlags.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+      );
+    }
+    if (softwareFaults != 0) {
+      faults.add(
+        'SW_FAULTS:0x${softwareFaults.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+      );
+    }
+    mcFaults = faults.isEmpty ? <String>['NONE'] : faults;
+    errorCount = faults.length;
+    lastErrorCode = faults.isEmpty ? 'OK' : 'MC_FAULT_FLAGS';
     notifyListeners();
   }
 

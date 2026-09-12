@@ -1,4 +1,5 @@
 import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
+import 'package:telemetry_dashboard/models/telemetry/can_decoder.dart';
 
 class CommandArgSchema {
   final String name;
@@ -45,7 +46,7 @@ class CommandValidationResult {
 }
 
 class CommandDictionaryService {
-  static const int auxControlCanId = 0x210;
+  static const int auxControlCanId = CanIds.auxCommand;
 
   final Map<String, CommandDefinition> _definitions = {
     'EMERGENCY_STOP': const CommandDefinition(

@@ -14,7 +14,7 @@ void main() {
         value: 31.5,
         source: 'external_gps',
         unit: 'km/h',
-        canId: 0x500,
+        canId: 0x412,
       );
 
       expect(payload.schemaVersion, telemetryEventSchemaVersion);
@@ -24,7 +24,7 @@ void main() {
       expect(payload.events.first.value, 31.5);
       expect(payload.events.first.source, 'external_gps');
       expect(payload.events.first.unit, 'km/h');
-      expect(payload.events.first.canId, 0x500);
+      expect(payload.events.first.canId, 0x412);
       expect(payload.events.first.sessionState, state.sessionState);
       expect(payload.events.first.lapPhase, state.lapPhase);
       expect(payload.events.first.seqInSession, 1);

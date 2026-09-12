@@ -138,10 +138,12 @@ bool _assertSparseContract(_PublishedMessage message, {int? lapNumber}) {
   if (!hasRequired) {
     return false;
   }
-  if (lapNumber != null && (payload['lap_number'] as num).toInt() != lapNumber) {
+  if (lapNumber != null &&
+      (payload['lap_number'] as num).toInt() != lapNumber) {
     return false;
   }
-  final hasEventsArray = payload.containsKey('events') && payload['events'] is List;
+  final hasEventsArray =
+      payload.containsKey('events') && payload['events'] is List;
   return !hasEventsArray;
 }
 
@@ -168,7 +170,7 @@ void main() {
             value,
             source: 'external_gps',
             unit: 'km/h',
-            canId: 0x500,
+            canId: 0x412,
           );
           await service.flushCanonicalBufferForTest(drainAll: true);
         }
@@ -290,8 +292,7 @@ void main() {
         final sessionsMsgs = sessionsMessages(transport);
         expect(sessionsMsgs, hasLength(1));
         final payload =
-            jsonDecode(sessionsMsgs.first.payloadJson)
-                as Map<String, dynamic>;
+            jsonDecode(sessionsMsgs.first.payloadJson) as Map<String, dynamic>;
         expect(payload['uid'], state.sessionId);
         expect(payload['session_name'], 'Offline Metadata');
 
@@ -329,8 +330,7 @@ void main() {
         final sessionsMsgs = sessionsMessages(transport);
         expect(sessionsMsgs, hasLength(1));
         final payload =
-            jsonDecode(sessionsMsgs.first.payloadJson)
-                as Map<String, dynamic>;
+            jsonDecode(sessionsMsgs.first.payloadJson) as Map<String, dynamic>;
         expect(payload['uid'], state.sessionId);
         expect(payload['session_name'], 'Retry Metadata');
 
@@ -395,37 +395,34 @@ void main() {
       },
     );
 
-    test(
-      'reconnects after an established connection drops',
-      () async {
-        final state = DashboardState();
-        final spool = LocalSpoolService(forceInMemory: true);
-        final transport = _FakeMqttTransport();
-        final service = MqttService(
-          state,
-          localSpoolService: spool,
-          transport: transport,
-          mqttRetryInterval: const Duration(milliseconds: 50),
-        );
+    test('reconnects after an established connection drops', () async {
+      final state = DashboardState();
+      final spool = LocalSpoolService(forceInMemory: true);
+      final transport = _FakeMqttTransport();
+      final service = MqttService(
+        state,
+        localSpoolService: spool,
+        transport: transport,
+        mqttRetryInterval: const Duration(milliseconds: 50),
+      );
 
-        await service.start();
-        await _drainMicrotasks();
-        expect(state.isServerConnected, isTrue);
+      await service.start();
+      await _drainMicrotasks();
+      expect(state.isServerConnected, isTrue);
 
-        // Simulate the broker going away, then coming back.
-        transport.simulateDisconnect();
-        expect(state.isServerConnected, isFalse);
-        expect(transport.isConnected, isFalse);
+      // Simulate the broker going away, then coming back.
+      transport.simulateDisconnect();
+      expect(state.isServerConnected, isFalse);
+      expect(transport.isConnected, isFalse);
 
-        transport.simulateReconnect();
-        await _drainMicrotasks();
-        expect(transport.isConnected, isTrue);
-        expect(state.isServerConnected, isTrue);
+      transport.simulateReconnect();
+      await _drainMicrotasks();
+      expect(transport.isConnected, isTrue);
+      expect(state.isServerConnected, isTrue);
 
-        await service.stop();
-        state.dispose();
-        await spool.close();
-      },
-    );
+      await service.stop();
+      state.dispose();
+      await spool.close();
+    });
   });
 }

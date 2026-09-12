@@ -75,9 +75,14 @@ uses to allow an update.
 - [ops/local-stack/telegraf/Dockerfile](ops/local-stack/telegraf/Dockerfile)
 - [ops/backend/Dockerfile.csv-streamer](ops/backend/Dockerfile.csv-streamer) — minimal compose image for the CSV streamer
 
-### CAN Signal Registry (app side)
+### CAN protocol and app bindings
 
-- [lib/models/telemetry/can_signal_registry.dart](lib/models/telemetry/can_signal_registry.dart) — single source of truth for every CAN signal published over MQTT
+- [dbc/network.dbc](dbc/network.dbc) — authoritative ECT2026 CAN protocol definition
+- [tools/generate_can_dart.py](tools/generate_can_dart.py) — generates the committed Dart decoder catalog
+- [lib/models/telemetry/can_bindings.dart](lib/models/telemetry/can_bindings.dart) — maps DBC signals to app state and MQTT metric names
+
+The same DBC is used by ECT2026 firmware tooling for C output:
+`python -m cantools generate_c_source --database-name network dbc/network.dbc`.
 
 ### Grafana Dashboards
 

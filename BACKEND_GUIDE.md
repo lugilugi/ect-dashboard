@@ -201,41 +201,78 @@ supported by the `json_v2` parser and is skipped (see [Section 7](#7-database-sc
 
 ---
 
-## 5. CAN Signal Registry
+## 5. CAN Protocol and App Bindings
 
-**The single source of truth for every signal the app publishes is
-[`lib/models/telemetry/can_signal_registry.dart`](lib/models/telemetry/can_signal_registry.dart).**
-The backend is a pure EAV sink — it stores *any* `signal_name` you give it —
-so the registry is the contract between the app and the dashboards.
+**The wire-protocol source of truth is
+[`dbc/network.dbc`](dbc/network.dbc), version `ECT2026_CAN_V5`.** The committed
+Dart catalog at
+[`lib/models/telemetry/generated/can_database.g.dart`](lib/models/telemetry/generated/can_database.g.dart)
+is produced by [`tools/generate_can_dart.py`](tools/generate_can_dart.py).
+The app-owned MQTT/state mapping lives in
+[`lib/models/telemetry/can_bindings.dart`](lib/models/telemetry/can_bindings.dart).
+The backend remains a pure EAV sink — it stores *any* `signal_name` the app
+publishes — so no database migration is required when adding a DBC signal.
+
+Regenerate after changing the DBC:
+
+```bash
+python -m pip install -r tools/requirements.txt
+python tools/generate_can_dart.py
+dart format lib/models/telemetry/generated/can_database.g.dart
+```
+
+The generated Dart file is committed so normal Flutter builds do not require
+Python. CI regenerates it and fails if the checked-in artifact is stale.
+ECT2026 firmware can generate its C pack/unpack implementation from the same
+DBC:
+
+```bash
+python -m cantools generate_c_source --database-name network dbc/network.dbc
+```
 
 | CAN ID | Message           | Signal                 | Unit  |
 | ------ | ----------------- | ---------------------- | ----- |
-| `0x110`| Pedal Input       | `Throttle_Percent`     | %     |
-| `0x110`| Pedal Input       | `Brake_Active`         | bool  |
-| `0x310`| Power Monitor 780 | `Voltage_780`          | V     |
-| `0x310`| Power Monitor 780 | `Current_780`          | A     |
-| `0x311`| Power Monitor 740 | `Voltage_740`          | V     |
-| `0x311`| Power Monitor 740 | `Current_740`          | A     |
-| `0x312`| Energy Counter    | `Joules_780`           | J     |
-| `0x312`| Energy Counter    | `Joules_740`           | J     |
-| `0x400`| Dashboard Status  | `Error_Count`          | count |
-| `0x400`| Dashboard Status  | `MC_Temp_C`            | C     |
-| `0x400`| Dashboard Status  | `Batt_Temp_C`          | C     |
-| `0x500`| Hall Speed/Dist   | `Speed_Kmh`            | km/h  |
-| `0x500`| Hall Speed/Dist   | `Distance_Km`          | km    |
-| `0x510`| GPS Fix           | `GPS_Satellites`       | count |
-| `0x510`| GPS Fix           | `GPS_Locked`           | bool  |
-| `0x510`| GPS Fix           | `GPS_Fallback_Active`  | bool  |
-| `0x510`| GPS Fix           | `GPS_Fallback_Period_Ms` | ms  |
-| `0x511`| GPS Position      | `GPS_Latitude_Deg`     | deg   |
-| `0x511`| GPS Position      | `GPS_Longitude_Deg`    | deg   |
-| `0x512`| GPS Motion        | `GPS_Speed_Kmh`        | km/h  |
-| `0x512`| GPS Motion        | `GPS_Heading_Deg`      | deg   |
+| `0x110`| PEDAL_STATUS       | `Throttle_Percent`       | %        |
+| `0x110`| PEDAL_STATUS       | `Brake_Active`           | bool     |
+| `0x310`| PACK_POWER         | `Voltage_780`            | V        |
+| `0x310`| PACK_POWER         | `Current_780`            | A        |
+| `0x311`| AUX_POWER          | `Voltage_740`            | V        |
+| `0x311`| AUX_POWER          | `Current_740`            | A        |
+| `0x312`| PACK_ENERGY        | `Joules_780`             | J        |
+| `0x400`| VEHICLE_MOTION     | `Speed_Kmh`              | km/h     |
+| `0x400`| VEHICLE_MOTION     | `Distance_Km`            | km       |
+| `0x410`| GPS_STATUS         | `GPS_Satellites`         | count    |
+| `0x410`| GPS_STATUS         | `GPS_Locked`             | bool     |
+| `0x410`| GPS_STATUS         | `GPS_Fallback_Active`    | bool     |
+| `0x410`| GPS_STATUS         | `GPS_Fallback_Period_Ms` | ms       |
+| `0x411`| GPS_POSITION       | `GPS_Latitude_Deg`       | deg      |
+| `0x411`| GPS_POSITION       | `GPS_Longitude_Deg`      | deg      |
+| `0x412`| GPS_MOTION         | `GPS_Speed_Kmh`           | km/h     |
+| `0x412`| GPS_MOTION         | `GPS_Heading_Deg`         | deg      |
+| `0x600`| MOTOR_STATE        | `Motor_Speed_Rpm`         | rpm      |
+| `0x600`| MOTOR_STATE        | `Motor_Sequencer_State`   | state    |
+| `0x600`| MOTOR_STATE        | `Motor_Status`             | bitfield |
+| `0x601`| MOTOR_CURRENT      | `Motor_Iq_A`              | A        |
+| `0x601`| MOTOR_CURRENT      | `Motor_Id_A`              | A        |
+| `0x601`| MOTOR_CURRENT      | `Motor_Current_A`          | A        |
+| `0x602`| MOTOR_VOLTAGE      | `DC_Bus_Voltage_V`        | V        |
+| `0x602`| MOTOR_VOLTAGE      | `Motor_Vq_V`               | V        |
+| `0x602`| MOTOR_VOLTAGE      | `Motor_Vd_V`               | V        |
+| `0x603`| MOTOR_FAULTS       | `MC_Fault_Flags`          | bitfield |
+| `0x603`| MOTOR_FAULTS       | `MC_Software_Faults`      | bitfield |
 
 Signal names use `CamelCase` with units as suffixes (`_C`, `_Kmh`, `_Deg`).
 Phone-GPS fallback reuses the same `GPS_*` names with a `phone_gps` source,
-so external and fallback GPS plot on the same series. CAN IDs live in
-[`CanMsgID`](lib/models/telemetry/can_messages.dart).
+so external and fallback GPS plot on the same series. The generated catalog
+owns CAN IDs and signal scaling; application behavior and MQTT names are
+intentionally kept in the separate `CanBindings` adapter.
+
+The V5 DBC does not define motor/battery temperature or driving-strategy
+signals. The existing temperature and strategy UI fields therefore remain
+legacy placeholders until the vehicle team assigns them to a real V5 signal;
+they must not be treated as measurements from this DBC. Motor fault flags are
+projected into the existing in-app fault indicator and are published as the
+`MC_Fault_Flags` and `MC_Software_Faults` bitfields.
 
 ---
 
@@ -243,30 +280,31 @@ so external and fallback GPS plot on the same series. CAN IDs live in
 
 ### Adding a new signal to an existing CAN message (easiest — no ID change)
 
-1. **App:** add a `CanSignalSpec` entry to `canSignalRegistry`
-   (`lib/models/telemetry/can_signal_registry.dart`).
-2. **App:** in `UsbService._dispatchPayload`
-   (`lib/services/ingest/usb_service.dart`), add the value to that CAN ID's
-   `_publishSignals(id, {...})` map.
-3. Done — the backend ingests it automatically (EAV schema), and Grafana
-   queries it by `signal_name` in the existing dashboards.
+1. **Protocol:** add the signal to `dbc/network.dbc`.
+2. **App:** run `python tools/generate_can_dart.py` and commit the generated
+   Dart file.
+3. **App:** add a `CanTelemetryBinding` and include the signal in the relevant
+   `CanBindings` handler in `lib/models/telemetry/can_bindings.dart`.
+4. Done — the backend ingests it automatically (EAV schema). Add or update a
+   Grafana panel only if the signal should be visualized.
 
 ### Adding a brand-new CAN message (new ID)
 
-1. **App:** add the ID to `CanMsgID` (`lib/models/telemetry/can_messages.dart`)
-   and a decoder class next to the other `*Payload` classes.
-2. **App:** add one `CanSignalSpec` per signal to `canSignalRegistry`.
-3. **App:** add a `case` to `UsbService._dispatchPayload` that decodes the
-   payload and calls `_publishSignals(canId, {signal: value})`.
+1. **Protocol:** add the message and signals to `dbc/network.dbc`.
+2. **App:** run `python tools/generate_can_dart.py` and commit the generated
+   catalog.
+3. **App:** add bindings and state behavior in `CanBindings` if the message is
+   operational telemetry; diagnostic-only messages may remain decode-only.
 4. **Backend:** nothing to change. Optionally add a Grafana panel querying the
    new `signal_name`.
 
 ### Removing a signal or message
 
-1. Delete its `CanSignalSpec` entry(ies) and its entries in
-   `_dispatchPayload`.
-2. Delete the CAN ID from `CanMsgID` if the whole message goes away.
-3. Historical rows stay in the database (they are just data), new batches
+1. Remove the signal or message from `dbc/network.dbc`.
+2. Regenerate and commit the generated catalog.
+3. Remove its `CanTelemetryBinding` and handler behavior if it is no longer
+   published.
+4. Historical rows stay in the database (they are just data), new batches
    simply stop carrying the field.
 
 ### Adding a new MQTT topic (beyond events/sessions)
