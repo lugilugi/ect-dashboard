@@ -21,6 +21,9 @@ jobs:
     # so the keystore presence is resolved once here at job level.
     env:
       HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      # Keep the exact SDK component paths in one place for the cache below.
+      # These are the versions requested by the current Flutter/Android build.
+      ANDROID_SDK_CACHE_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,6 +43,20 @@ jobs:
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
+
+      # ubuntu-latest does not consistently preinstall the exact Android
+      # components required by this project. Without this cache, Gradle spends
+      # roughly a minute installing the NDK, SDK platform, and CMake on every
+      # release build.
+      - name: Restore Android SDK component cache
+        id: android-sdk-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_CACHE_ROOT }}/ndk/27.0.12077973
+            ${{ env.ANDROID_SDK_CACHE_ROOT }}/platforms/android-33
+            ${{ env.ANDROID_SDK_CACHE_ROOT }}/cmake/3.22.1
+          key: ${{ runner.os }}-android-sdk-v1-ndk-27.0.12077973-platform-33-cmake-3.22.1
 
       - name: Install dependencies
         run: flutter pub get
@@ -95,9 +112,19 @@ jobs:
 
       - name: Build APK
         run: |
-          flutter build apk --release \
+          flutter build apk --release --no-pub \
             --build-name=${{ steps.version.outputs.build_name }} \
             --build-number=${{ github.run_number }}
+
+      - name: Save Android SDK component cache
+        if: steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_CACHE_ROOT }}/ndk/27.0.12077973
+            ${{ env.ANDROID_SDK_CACHE_ROOT }}/platforms/android-33
+            ${{ env.ANDROID_SDK_CACHE_ROOT }}/cmake/3.22.1
+          key: ${{ steps.android-sdk-cache.outputs.cache-primary-key }}
 
       - name: Verify APK signing certificate
         if: env.HAS_RELEASE_KEYSTORE == 'true'
