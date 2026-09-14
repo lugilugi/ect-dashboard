@@ -123,6 +123,18 @@ void main() {
     expect(harness.state.distanceKm, closeTo(1.2345, 0.000001));
   });
 
+  test('routes the deadman-active pedal signal into DashboardState', () async {
+    final harness = _BindingHarness();
+    addTearDown(harness.dispose);
+
+    harness.bindings.handle(
+      _decode(CanIds.pedalStatus, <int>[0, 0, 0x01, 0, 0, 0]),
+      receivedAtUtc: DateTime.utc(2026, 1, 1),
+    );
+
+    expect(harness.state.isDeadmanActive, isTrue);
+  });
+
   test(
     'routes auxiliary commands and motor faults through app policy',
     () async {

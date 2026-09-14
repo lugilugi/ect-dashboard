@@ -522,6 +522,9 @@ class EfficiencyGrid extends StatelessWidget {
   // Throttle Bar
   // ---------------------------------------------------------------------------
   Widget _buildGridThrottleBar() {
+    final displayPercent = state.throttlePercent.round().clamp(0, 100).toInt();
+    final deadmanColor = state.isDeadmanActive ? p.green : p.red;
+
     return Container(
       height: 30,
       decoration: BoxDecoration(
@@ -541,6 +544,20 @@ class EfficiencyGrid extends StatelessWidget {
                 color: state.isBrakePressed
                     ? (p.light ? Colors.white : Colors.black)
                     : p.dimText,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Container(width: 1, color: p.border),
+          Container(
+            width: 58,
+            alignment: Alignment.center,
+            color: deadmanColor,
+            child: Text(
+              "DMN",
+              style: TextStyle(
+                color: p.light ? Colors.white : Colors.black,
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
               ),
@@ -575,9 +592,9 @@ class EfficiencyGrid extends StatelessWidget {
             width: 80,
             alignment: Alignment.center,
             child: Text(
-              state.throttlePercent >= 100
+              displayPercent >= 100
                   ? "MAX"
-                  : "${state.throttlePercent.toStringAsFixed(0).padLeft(2, '0')}%",
+                  : "${displayPercent.toString().padLeft(2, '0')}%",
               style: TextStyle(
                 fontFamily: 'monospace',
                 fontFeatures: const [FontFeature.tabularFigures()],

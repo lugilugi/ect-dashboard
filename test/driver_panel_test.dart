@@ -49,6 +49,30 @@ void main() {
       state.dispose();
     });
 
+    testWidgets('shows MAX instead of rounding 99% up to 100%', (tester) async {
+      final state = DashboardState();
+      state.throttlePercent = 99.6;
+
+      await pumpGrid(tester, state);
+
+      expect(find.text('MAX'), findsOneWidget);
+      expect(find.text('100%'), findsNothing);
+
+      state.dispose();
+    });
+
+    testWidgets('shows the active deadman status in the throttle bar',
+        (tester) async {
+      final state = DashboardState();
+      state.isDeadmanActive = true;
+
+      await pumpGrid(tester, state);
+
+      expect(find.text('DMN'), findsOneWidget);
+
+      state.dispose();
+    });
+
     testWidgets('GPS fix renders the car marker without the waiting overlay',
         (tester) async {
       final state = DashboardState();

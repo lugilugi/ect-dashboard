@@ -137,6 +137,7 @@ class TelemetryMetricsStore {
   // Pedal states
   double throttlePercent = 0.0;
   bool isBrakePressed = false;
+  bool isDeadmanActive = false;
 
   // Aux states
   bool leftTurn = false;
@@ -849,6 +850,8 @@ class DashboardState extends ChangeNotifier {
   set throttlePercent(double value) => _metrics.throttlePercent = value;
   bool get isBrakePressed => _metrics.isBrakePressed;
   set isBrakePressed(bool value) => _metrics.isBrakePressed = value;
+  bool get isDeadmanActive => _metrics.isDeadmanActive;
+  set isDeadmanActive(bool value) => _metrics.isDeadmanActive = value;
 
   // Aux states
   bool get leftTurn => _metrics.leftTurn;
@@ -1332,6 +1335,7 @@ class DashboardState extends ChangeNotifier {
   void resetTelemetry() {
     throttlePercent = 0;
     isBrakePressed = false;
+    isDeadmanActive = false;
     mainVoltage = 0;
     current780 = 0;
     current740 = 0;
@@ -1783,9 +1787,11 @@ class DashboardState extends ChangeNotifier {
   void updatePedal({
     required double throttlePercent,
     required bool isBrakePressed,
+    required bool isDeadmanActive,
   }) {
     this.throttlePercent = throttlePercent;
     this.isBrakePressed = isBrakePressed;
+    this.isDeadmanActive = isDeadmanActive;
     notifyListeners();
   }
 

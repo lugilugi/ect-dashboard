@@ -56,6 +56,12 @@ const List<CanTelemetryBinding> canTelemetryBindings = <CanTelemetryBinding>[
     unit: 'bool',
   ),
   CanTelemetryBinding(
+    canId: CanIds.pedalStatus,
+    dbcSignalName: 'deadman_active',
+    metricName: 'Deadman_Active',
+    unit: 'bool',
+  ),
+  CanTelemetryBinding(
     canId: CanIds.packPower,
     dbcSignalName: 'voltage_v',
     metricName: 'Voltage_780',
@@ -240,10 +246,12 @@ class CanBindings {
         state.updatePedal(
           throttlePercent: _bindingValue(message, 'throttle_command'),
           isBrakePressed: message.value('brake_active') >= 0.5,
+          isDeadmanActive: message.value('deadman_active') >= 0.5,
         );
         _publishSignals(message, const <String>[
           'throttle_command',
           'brake_active',
+          'deadman_active',
         ]);
         break;
 

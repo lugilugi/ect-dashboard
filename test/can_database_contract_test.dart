@@ -38,6 +38,12 @@ void main() {
     expect(throttle, isNotNull);
     expect(throttle!.metricName, 'Throttle_Percent');
     expect(throttle.transformValue(16383.5), closeTo(50.0, 0.01));
+    final deadman = canTelemetryBindingFor(
+      CanIds.pedalStatus,
+      'deadman_active',
+    );
+    expect(deadman, isNotNull);
+    expect(deadman!.metricName, 'Deadman_Active');
     expect(distance, isNotNull);
     expect(distance!.metricName, 'Distance_Km');
     expect(distance.transformValue(1234.0), closeTo(1.234, 0.000001));

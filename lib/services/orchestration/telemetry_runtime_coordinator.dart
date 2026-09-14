@@ -102,6 +102,10 @@ class TelemetryRuntimeCoordinator {
       return;
     }
 
+    // Keep the dashboard device awake for as long as the app is running.
+    // The lock is released in dispose() when the app's runtime ends.
+    _setWakelock(true);
+
     _localSpoolService = LocalSpoolService(
       readableCopyMaxFileBytes: state.readableCopyMaxFileBytes,
     );
@@ -307,8 +311,6 @@ class TelemetryRuntimeCoordinator {
     final shouldRunForegroundService =
         sessionState == SessionState.armed ||
         sessionState == SessionState.logging;
-
-    _setWakelock(shouldRunForegroundService);
 
     if (_lastObservedSessionState == sessionState) {
       return;

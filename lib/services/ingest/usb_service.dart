@@ -589,7 +589,8 @@ class UsbService {
 
       // --- SEND PEDAL (0x110) ---
       int throttle15bit = ((throttle / 100.0) * 32767).toInt().clamp(0, 32767);
-      int flags = braking ? 0x04 : 0x00;
+      // PEDAL_STATUS byte 2: deadman_active is bit 0, brake_active is bit 2.
+      int flags = 0x01 | (braking ? 0x04 : 0x00);
       String tHex = throttle15bit.toRadixString(16).padLeft(4, '0');
       String tLe = tHex.substring(2, 4) + tHex.substring(0, 2);
       String fHex = flags.toRadixString(16).padLeft(2, '0');
