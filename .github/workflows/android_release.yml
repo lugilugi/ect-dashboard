@@ -42,7 +42,7 @@ jobs:
           cache: true
 
       - name: Set up Gradle cache
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # ubuntu-latest does not consistently preinstall the exact Android
       # components required by this project. Without this cache, Gradle spends
