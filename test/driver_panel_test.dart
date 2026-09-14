@@ -61,14 +61,30 @@ void main() {
       state.dispose();
     });
 
-    testWidgets('shows the active deadman status in the throttle bar',
-        (tester) async {
+    testWidgets('deadman uses the throttle/brake status slot', (tester) async {
       final state = DashboardState();
-      state.isDeadmanActive = true;
+      state.updatePedal(
+        throttlePercent: 0,
+        isBrakePressed: false,
+        isDeadmanActive: true,
+      );
 
       await pumpGrid(tester, state);
 
       expect(find.text('DMN'), findsOneWidget);
+      expect(find.text('THR'), findsNothing);
+      final deadmanRect = tester.getRect(find.text('DMN'));
+
+      state.updatePedal(
+        throttlePercent: 0,
+        isBrakePressed: true,
+        isDeadmanActive: false,
+      );
+      await pumpGrid(tester, state);
+
+      expect(find.text('BRK'), findsOneWidget);
+      expect(find.text('DMN'), findsNothing);
+      expect(tester.getRect(find.text('BRK')), deadmanRect);
 
       state.dispose();
     });
