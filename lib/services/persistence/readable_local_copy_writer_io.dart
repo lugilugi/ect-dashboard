@@ -40,7 +40,44 @@ class ReadableLocalCopyWriter {
   int _maxFileBytes;
 
   Directory? _rootDirectory;
-  final Map<String, IOSink> _sinks = <String, IOSink>{};
+  final Map<String, RandomAccessFile> _sinks = <String, RandomAccessFile>{};
+  static const eventColumns = [
+    'schema_version',
+    'session_uid',
+    'seq_in_session',
+    'ts_wall_utc',
+    'observed_at_utc',
+    'ts_session_ms',
+    'lap_number',
+    'session_state',
+    'lap_phase',
+    'signal_name',
+    'value',
+    'unit',
+    'source',
+    'quality',
+    'sample_kind',
+    'source_sample_id',
+    'can_id',
+    'freshness_ms',
+  ];
+  static const metadataColumns = [
+    'schema_version',
+    'uid',
+    'metadata_revision',
+    'session_name',
+    'started_at_utc',
+    'ended_at_utc',
+    'session_state',
+    'laps_completed',
+  ];
+  Future<String?> appendRecord(Map<String, Object?> record) =>
+      appendSessionCsvRow(
+        sessionId: (record['session_uid'] ?? record['uid']) as String,
+        row: record,
+        columns: record.containsKey('uid') ? metadataColumns : eventColumns,
+        prefix: record.containsKey('uid') ? 'sessions_v2_' : 'events_v2_',
+      );
 
   ReadableLocalCopyWriter({int maxFileBytes = 4 * 1024 * 1024})
     : _maxFileBytes = maxFileBytes;
@@ -88,6 +125,8 @@ class ReadableLocalCopyWriter {
   Future<String?> appendSessionCsvRow({
     required String sessionId,
     required Map<String, Object?> row,
+    List<String>? columns,
+    String prefix = 'session_',
   }) async {
     final root = _rootDirectory;
     if (root == null) {
@@ -103,7 +142,7 @@ class ReadableLocalCopyWriter {
     final normalizedSessionId = _normalizeSessionId(
       sessionId.isEmpty ? 'pending-session' : sessionId,
     );
-    final filePath = p.join(csvRoot.path, 'session_$normalizedSessionId.csv');
+    final filePath = p.join(csvRoot.path, '$prefix$normalizedSessionId.csv');
     final file = File(filePath);
 
     await _rotateIfNeeded(file, nowUtc: nowUtc);
@@ -113,23 +152,23 @@ class ReadableLocalCopyWriter {
 
     final buffer = StringBuffer();
     if (shouldWriteHeader) {
-      buffer.writeln(_sessionCsvColumns.join(','));
+      buffer.writeln((columns ?? _sessionCsvColumns).join(','));
     }
 
-    final rowValues = _sessionCsvColumns
+    final rowValues = (columns ?? _sessionCsvColumns)
         .map((column) => _escapeCsvValue(row[column]))
         .join(',');
     buffer.writeln(rowValues);
 
-    _sinkFor(filePath).write(buffer.toString());
+    await (await _sinkFor(filePath)).writeString(buffer.toString());
     return file.path;
   }
 
-  IOSink _sinkFor(String filePath) {
-    return _sinks.putIfAbsent(
-      filePath,
-      () => File(filePath).openWrite(mode: FileMode.append),
-    );
+  Future<RandomAccessFile> _sinkFor(String filePath) async {
+    final existing = _sinks[filePath];
+    if (existing != null) return existing;
+    if (_sinks.length >= 8) await _closeSink(_sinks.keys.first);
+    return _sinks[filePath] = await File(filePath).open(mode: FileMode.append);
   }
 
   Future<void> _closeSink(String filePath) async {
@@ -140,8 +179,7 @@ class ReadableLocalCopyWriter {
     }
   }
 
-  /// Flushes every open session CSV to the OS (called once per second by
-  /// [LocalSpoolService] so a sudden power loss costs at most ~1s of rows).
+  /// Flushes file contents before the journal advances its export cursor.
   Future<void> flush() async {
     for (final sink in _sinks.values) {
       await sink.flush();
@@ -295,7 +333,6 @@ class ReadableLocalCopyWriter {
   }
 
   Future<void> _rotateIfNeeded(File file, {required DateTime nowUtc}) async {
-    await flush();
     if (!await file.exists()) {
       return;
     }

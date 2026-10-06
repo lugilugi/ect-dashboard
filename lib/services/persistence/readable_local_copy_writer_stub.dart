@@ -17,6 +17,7 @@ class ReadableLocalCopyPreview {
 }
 
 class ReadableLocalCopyWriter {
+  Future<String?> appendRecord(Map<String, Object?> record) async => null;
   int maxFileBytes;
 
   ReadableLocalCopyWriter({this.maxFileBytes = 4 * 1024 * 1024});

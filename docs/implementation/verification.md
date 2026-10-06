@@ -18,5 +18,17 @@
   duplicate archive identities after writer restart.
 
 Broader container and phone-path checks remain pending subsequent stages.
+
+## Capture and journal stages
+
+- Capture/clock stage: 106 Flutter tests passed; changed-file analysis passed.
+- Journal stage: dependency resolution, full analysis (no issues), and all 111
+  Flutter tests passed.
+- Five real-SQLite cases cover reopening, one-time format reset, quota identity
+  protection, atomic ending metadata/checkpoint clear, and local CSV recovery
+  after export failure with retention protection.
+- RandomAccessFile flush replaces buffered IOSink flush for cursor advancement.
+
+The new recorder/journal are integrated into the runtime in the sender stage.
 Hardware qualification is pending by user instruction: no Android/CAN hardware
 is available. Do not publish or declare a hardware-qualified release.

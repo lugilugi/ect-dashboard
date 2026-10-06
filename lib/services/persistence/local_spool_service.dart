@@ -135,6 +135,20 @@ class SpoolDecodedEventRecord {
 }
 
 class SpoolHealthStore extends ChangeNotifier {
+  String? storageError;
+  String? exportError;
+  int rejectedRecordCount = 0;
+  void updateRecordingErrors({
+    String? storage,
+    String? export,
+    int rejected = 0,
+  }) {
+    storageError = storage;
+    exportError = export;
+    rejectedRecordCount += rejected;
+    notifyListeners();
+  }
+
   int _pendingPublishCount = 0;
   DateTime? _oldestEnqueuedAtUtc;
   int _oldestAgeMs = 0;
