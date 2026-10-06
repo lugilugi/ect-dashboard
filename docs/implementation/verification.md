@@ -177,3 +177,24 @@ On each dedicated test volume, an intentionally wrong schema fingerprint failed
 the deployment's health command after restart. Both original records and the
 mismatch marker remained; initialization did not silently adopt/reset the volume.
 These tests then removed their own volumes. No production reset occurred.
+
+## Stage 09 — cleanup and handover
+
+Retired misleading apply_migrations scripts; initialize_schema.sh/ps1 call the
+fresh-only Python initializer. Export shell/PowerShell/container wrappers share
+one reader-role Python implementation. Updated README, BACKEND_GUIDE, deployment
+guide, contract, AGENTS, changelog and explicit paired reset/hardware runbook.
+Removed the duplicate MQTT-spool reset UI and old CSV row API/format. Local
+storage clear is one runtime operation preserving endpoint/USB/GPS/UI prefs.
+
+No Android signing, version/tag, published APK, production reset or live data
+change was performed. The existing release workflow keeps its signing checks
+and increasing run-number build identity; it must not be treated as hardware
+qualification. Both Docker layouts passed local software tests; CI execution,
+APK construction and the real-phone release gate are outstanding.
+
+Local implementation is reviewable as nine ordered commits on
+codex/backend-clean-reset. Stage 08 is ac4b857; stage 09 is this documentation
+commit. Keep the full branch together for qualification/cutover. Successful and
+previously retained task containers/volumes were selectively removed; unrelated
+Docker resources and downloaded image caches are preserved.

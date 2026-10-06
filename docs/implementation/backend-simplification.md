@@ -1,6 +1,6 @@
 # ECT backend simplification: clean-reset implementation plan
 
-**Status:** plan only; no application, database, container, or phone changes.
+**Status:** stages 01–09 implemented; both layouts passed automated software qualification. The actual-device part of stage 08 and release/cutover remain open. Android APK and real phone/CAN qualification remain pending by user instruction. See [verification evidence](verification.md) and [cutover gate](cutover.md).
 
 **Baseline:** [main at 5cdb2cc2cd860a164177c7b9c40443d07aeee169](https://github.com/lugilugi/ect-dashboard/commit/5cdb2cc2cd860a164177c7b9c40443d07aeee169), audited on 6 October 2026. Reconcile subsequent changes before implementation.
 
@@ -103,7 +103,7 @@ COPY targets the validated view, whose trigger handles duplicates; routine redel
 
 ## Commit stages
 
-Use one implementation branch. Intermediate commits are review checkpoints, not deployments of an unmatched phone/server pair. Release the complete branch after its end-to-end gate. Each stage includes implementation, behavior-level tests, and documentation.
+Use one implementation branch. Intermediate commits are review checkpoints, not deployments of an unmatched phone/server pair. Release the complete branch after its end-to-end gate. Each stage includes implementation, behavior-level tests, and documentation. Stage 08 has an automated host capture gate and a separate real Android/CAN gate; the latter remains explicitly pending until hardware is available.
 
 | Commit | Proposed message | Scope and exit gate |
 |---|---|---|
@@ -114,8 +114,8 @@ Use one implementation branch. Intermediate commits are review checkpoints, not 
 | 05 | refactor(mqtt): send only from the journal | One sender/serializer; bounded reads, retries, reconnect/reset/shutdown. Verify offline/replay/ack races and correct event context. |
 | 06 | refactor(ops): share configuration and complete deployment parity | Shared configuration, custom credentials, schema readiness, roles, CSV HTTP, persistence and shutdown. Both Docker layouts pass actual ingestion checks. |
 | 07 | fix(grafana): use shared analytical definitions | Correct present metrics/alerts, energy/laps, freshness and asynchronous alignment. Every query runs against real SQL and Grafana loads correctly. |
-| 08 | test(e2e): qualify Android to server delivery | Extend CI and run actual-device acceptance against both layouts; save identity comparisons, runtime rates and failure evidence. |
-| 09 | chore(release): finish cleanup and document coordinated reset | Remove leftovers; complete exports/reconciliation, changelog and matched release/reset instructions. Release only the qualified pair. |
+| 08 | test(e2e): qualify capture and both backend layouts | Extend CI and run actual-device acceptance against both layouts; save identity comparisons, runtime rates and failure evidence. |
+| 09 | chore(ops): document clean cutover and recovery tools | Remove leftovers; complete exports/reconciliation, changelog and matched release/reset instructions. Release only the qualified pair. |
 
 ### 01: contract and feasibility
 
@@ -228,3 +228,22 @@ Each commit states what changed, why, behavior/format effects and exact checks/r
 After Dart changes run flutter pub get, flutter analyze --no-pub and flutter test --no-pub. Keep generated-CAN consistency checks. Add Python CSV, real SQLite, schema/ingestion and executable Grafana-query checks. [Current CI](https://github.com/lugilugi/ect-dashboard/blob/5cdb2cc2cd860a164177c7b9c40443d07aeee169/.github/workflows/ci.yml#L16).
 
 **Completion:** one capture owner, one journal/outbox, one sender, one active contract, one telemetry schema, shared analytics, both Docker layouts working, and a recorded successful actual-phone-to-server run. Static review and healthy containers do not establish completion.
+
+## Recorded implementation checkpoints
+
+| Stage | Local commit | Outcome |
+|---|---|---|
+| 01 | 35f3ae0 | Architecture, ADR, contract, fixtures and acceptance gates |
+| 02 | 5e543c7 | Clean v2 schema, ingestion and server CSV |
+| 03 | eb93fb4 | Recorder context, elapsed clock and signal observation semantics |
+| 04 | dde2ec3 | Real SQLite journal, checkpoint, watermarks and local CSV recovery |
+| 05 | 1ddabaf | One journal sender and integrated runtime; old paths retired |
+| 06 | c0be623 | Shared Docker inputs, bounded roles and service parity |
+| 07 | 1394530 | Shared analytics and truthful unavailable/freshness behavior |
+| 08 | ac4b857 | Both-layout host capture qualification, recovery tools and fixes |
+| 09 | This documentation commit | Cleanup, operations, handover and clean-cutover runbook |
+
+Automated software qualification passed; stage 08's actual Android/CAN run,
+APK/signing identity and release/cutover remain explicitly pending. The user
+confirmed no phone/CAN bridge is available. See verification.md for exact results
+and limits; the architecture is implemented without claiming hardware readiness.
