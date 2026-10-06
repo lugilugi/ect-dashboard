@@ -339,7 +339,7 @@ class DriverAlertService {
       final minKey = '${spec.key.wireValue}_MIN';
       final maxKey = '${spec.key.wireValue}_MAX';
 
-      if (value == spec.restValue) {
+      if (!value.isFinite || value == spec.restValue) {
         _activeVariableViolations[minKey] = false;
         _activeVariableViolations[maxKey] = false;
         continue;

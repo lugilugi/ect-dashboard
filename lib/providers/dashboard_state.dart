@@ -151,8 +151,8 @@ class TelemetryMetricsStore {
   double mainVoltage = 0.0;
   double current780 = 0.0;
   double current740 = 0.0;
-  double mcTempC = 0.0;
-  double battTempC = 0.0;
+  double mcTempC = double.nan;
+  double battTempC = double.nan;
 
   // Energy
   double energyJ780 = 0.0;
@@ -170,7 +170,7 @@ class TelemetryMetricsStore {
 
   // Debug & Engineer screen
   Map<int, String> lastCanPayloads = {};
-  List<double> bmsCells = List.filled(24, 3.80);
+  List<double> bmsCells = List.filled(24, double.nan);
   double bus12V = 12.4;
   List<String> mcFaults = ["NONE"];
 
@@ -1355,8 +1355,8 @@ class DashboardState extends ChangeNotifier {
     mainVoltage = 0;
     current780 = 0;
     current740 = 0;
-    mcTempC = 0.0;
-    battTempC = 0.0;
+    mcTempC = double.nan;
+    battTempC = double.nan;
     energyJ780 = 0;
     speedKmh = 0;
     distanceKm = 0;
@@ -1365,7 +1365,7 @@ class DashboardState extends ChangeNotifier {
     errorCount = 0;
     lastErrorCode = 'OK';
     strategy = 'PACE';
-    bmsCells = List.filled(24, 3.80);
+    bmsCells = List.filled(24, double.nan);
     bus12V = 12.4;
     _speedHistory.clear();
     _powerKwHistory.clear();

@@ -69,3 +69,19 @@ direct raw-table insert denied; independent CSV output exists. Disposable Compos
 with custom credentials ingested the same fixture and served its CSV over HTTP.
 Final shared-image rebuild and restart/outage qualification remain stage 08.
 No installed data volume or live deployment was changed.
+
+## Stage 07 — analytics and unavailable signals
+
+Dashboards query shared session totals, accumulator deltas, completed-lap bounds
+and lap analytics. Session discovery works before metadata and uses captured
+start times. Map coordinates pair by source fix identity. Removed unsupported
+auxiliary energy/temperature panels, corrected current fault bitfields and
+pack-only voltage alert; live alerts use original source freshness.
+Sequence gaps are explicitly provisional because delivery order is unconstrained.
+Unavailable phone temperature and battery cells are NaN internally, shown as
+unavailable where rendered and skipped by numeric alert evaluation.
+
+Checks: all 53 provisioned panel, variable and alert SQL queries executed against
+the disposable Compose schema. flutter analyze --no-pub: no issues; full tests:
+88 passed, including unavailable-signal test. Real Grafana datasource and nonempty
+analytics fixture assertions are stage 08 checks.

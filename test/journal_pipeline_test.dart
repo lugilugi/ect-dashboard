@@ -77,6 +77,14 @@ void main() {
       r.record.payload['signal_name'] == 'Recovery_Resumed').length, 1);
   });
   test(
+    'unavailable temperature and battery cell signals have no numeric placeholder',
+    () {
+      expect(state.mcTempC.isNaN, isTrue);
+      expect(state.battTempC.isNaN, isTrue);
+      expect(state.bmsCells.every((v) => v.isNaN), isTrue);
+    },
+  );
+  test(
     'offline final metadata clears recovery atomically; restart retains backlog',
     () async {
       final recorder = TelemetryRecorder(state, journal: journal);
