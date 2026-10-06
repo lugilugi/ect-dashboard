@@ -60,7 +60,6 @@ void main() {
         canId: 0x412,
         seqInSession: 990,
         qualityFlag: 'ok',
-        receivedAtUsMono: 123456789,
       );
 
       final encoded = event.toJson();
@@ -79,7 +78,6 @@ void main() {
       expect(decoded.canId, equals(event.canId));
       expect(decoded.seqInSession, equals(event.seqInSession));
       expect(decoded.qualityFlag, equals(event.qualityFlag));
-      expect(decoded.receivedAtUsMono, equals(event.receivedAtUsMono));
     });
 
     test('telemetry event batch payload round-trip', () {

@@ -282,6 +282,7 @@ class DashboardState extends ChangeNotifier {
   set crossingValid(bool value) => _sessionControl.crossingValid = value;
 
   int get sessionTimeSeconds => _sessionControl.sessionTimeSeconds;
+  int get sessionElapsedMs => _sessionControl.elapsedMs;
   set sessionTimeSeconds(int value) =>
       _sessionControl.sessionTimeSeconds = value;
 

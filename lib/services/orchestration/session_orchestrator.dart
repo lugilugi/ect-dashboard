@@ -34,9 +34,7 @@ class SessionOrchestrator {
     _standstillSinceUtc = DateTime.now().toUtc();
   }
 
-  SessionControlState arm({
-    required SessionControlState control,
-  }) {
+  SessionControlState arm({required SessionControlState control}) {
     return control.copyWith(
       sessionState: SessionState.armed,
       uiMode: UiMode.driver,
@@ -156,6 +154,21 @@ class SessionOrchestrator {
 }
 
 class SessionControlStore {
+  final Stopwatch _clock = Stopwatch()..start();
+  final int Function()? _monotonicMs;
+  int _elapsedMs = 0;
+  int _loggingStartedMs = 0;
+  SessionControlStore({int Function()? monotonicMs})
+    : _monotonicMs = monotonicMs;
+
+  int get _nowMs => _monotonicMs?.call() ?? _clock.elapsedMilliseconds;
+  int get elapsedMs =>
+      _elapsedMs + (isLogging ? _nowMs - _loggingStartedMs : 0);
+  set elapsedMs(int value) {
+    _elapsedMs = value < 0 ? 0 : value;
+    _loggingStartedMs = _nowMs;
+  }
+
   UiMode uiMode = UiMode.driver;
   SessionState _sessionState = SessionState.idle;
   LapPhase lapPhase = LapPhase.prestartCheck;
@@ -164,13 +177,16 @@ class SessionControlStore {
   int crossingDeadzoneMs = 3000;
   int crossingDeadzoneRemainingMs = 0;
   bool crossingValid = false;
-  int sessionTimeSeconds = 0;
+  int get sessionTimeSeconds => elapsedMs ~/ 1000;
+  set sessionTimeSeconds(int value) => elapsedMs = value * 1000;
 
   SessionState get sessionState => _sessionState;
 
   bool get isLogging => _sessionState == SessionState.logging;
 
   void applyControlState(SessionControlState control) {
+    if (isLogging) _elapsedMs = elapsedMs;
+    _loggingStartedMs = _nowMs;
     lapsCompleted = control.lapsCompleted;
     crossingDeadzoneMs = control.crossingDeadzoneMs;
     crossingDeadzoneRemainingMs = control.crossingDeadzoneRemainingMs;
@@ -181,6 +197,7 @@ class SessionControlStore {
   }
 
   void reset() {
+    elapsedMs = 0;
     _sessionState = SessionState.idle;
     lapPhase = LapPhase.prestartCheck;
     lapsCompleted = 0;
@@ -189,10 +206,6 @@ class SessionControlStore {
   }
 
   void advanceOneSecond() {
-    if (_sessionState == SessionState.logging) {
-      sessionTimeSeconds += 1;
-    }
-
     if (crossingDeadzoneRemainingMs > 0) {
       crossingDeadzoneRemainingMs = (crossingDeadzoneRemainingMs - 1000)
           .clamp(0, crossingDeadzoneRemainingMs)

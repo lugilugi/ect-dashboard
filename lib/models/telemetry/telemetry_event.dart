@@ -14,7 +14,12 @@ class DecodedMetricEvent {
   final int? canId;
   final int seqInSession;
   final String? qualityFlag;
-  final int? receivedAtUsMono;
+  final DateTime? _observedAtUtc;
+  final String sampleKind;
+  final String? sourceSampleId;
+  final int freshnessMs;
+
+  DateTime get observedAtUtc => (_observedAtUtc ?? tsWallUtc).toUtc();
 
   const DecodedMetricEvent({
     required this.metricKey,
@@ -30,15 +35,19 @@ class DecodedMetricEvent {
     this.canId,
     required this.seqInSession,
     this.qualityFlag,
-    this.receivedAtUsMono,
-  });
+    DateTime? observedAtUtc,
+    this.sampleKind = 'observation',
+    this.sourceSampleId,
+    this.freshnessMs = 5000,
+  }) : _observedAtUtc = observedAtUtc;
 
   Map<String, dynamic> toJson() {
     return {
-      'metric_key': metricKey,
-      'metric_value': value,
+      'schema_version': 2,
+      'signal_name': metricKey,
+      'value': value,
       if (unit != null) 'unit': unit,
-      'session_id': sessionId,
+      'session_uid': sessionId,
       if (lapNumber != null) 'lap_number': lapNumber,
       'session_state': sessionState.wireValue,
       'lap_phase': lapPhase.wireValue,
@@ -47,8 +56,11 @@ class DecodedMetricEvent {
       'source': source,
       if (canId != null) 'can_id': canId,
       'seq_in_session': seqInSession,
-      if (qualityFlag != null) 'quality_flag': qualityFlag,
-      if (receivedAtUsMono != null) 'received_at_us_mono': receivedAtUsMono,
+      'quality': qualityFlag ?? 'ok',
+      'observed_at_utc': observedAtUtc.toIso8601String(),
+      'sample_kind': sampleKind,
+      'freshness_ms': freshnessMs,
+      if (sourceSampleId != null) 'source_sample_id': sourceSampleId,
     };
   }
 
@@ -57,10 +69,10 @@ class DecodedMetricEvent {
     final lapPhaseWire = json['lap_phase'] as String? ?? 'RUNNING';
 
     return DecodedMetricEvent(
-      metricKey: json['metric_key'] as String,
-      value: (json['metric_value'] as num).toDouble(),
+      metricKey: json['signal_name'] as String,
+      value: (json['value'] as num).toDouble(),
       unit: json['unit'] as String?,
-      sessionId: json['session_id'] as String,
+      sessionId: json['session_uid'] as String,
       lapNumber: (json['lap_number'] as num?)?.toInt(),
       sessionState: SessionStateWire.fromWire(sessionStateWire),
       lapPhase: LapPhaseWire.fromWire(lapPhaseWire),
@@ -69,8 +81,11 @@ class DecodedMetricEvent {
       source: json['source'] as String,
       canId: (json['can_id'] as num?)?.toInt(),
       seqInSession: (json['seq_in_session'] as num).toInt(),
-      qualityFlag: json['quality_flag'] as String?,
-      receivedAtUsMono: (json['received_at_us_mono'] as num?)?.toInt(),
+      qualityFlag: json['quality'] as String?,
+      observedAtUtc: DateTime.parse(json['observed_at_utc'] as String).toUtc(),
+      sampleKind: json['sample_kind'] as String,
+      sourceSampleId: json['source_sample_id'] as String?,
+      freshnessMs: (json['freshness_ms'] as num?)?.toInt() ?? 5000,
     );
   }
 }

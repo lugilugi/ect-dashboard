@@ -101,7 +101,8 @@ void main() {
     });
 
     test('session clock only advances while logging', () {
-      final store = SessionControlStore();
+      var monotonicMs = 0;
+      final store = SessionControlStore(monotonicMs: () => monotonicMs);
       store.applyControlState(_baseControl(sessionState: SessionState.idle));
       store.sessionTimeSeconds = 10;
       store.advanceOneSecond();
@@ -112,6 +113,7 @@ void main() {
       expect(store.sessionTimeSeconds, 10);
 
       store.applyControlState(_baseControl(sessionState: SessionState.logging));
+      monotonicMs += 1000;
       store.advanceOneSecond();
       expect(store.sessionTimeSeconds, 11);
 
