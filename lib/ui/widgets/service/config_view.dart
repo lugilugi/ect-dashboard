@@ -1257,6 +1257,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                               ),
                           ],
                         ),
+                        const RoadMapAttribution(),
                       ],
                     ),
                     Positioned(

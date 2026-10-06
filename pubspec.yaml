@@ -46,6 +46,10 @@ dependencies:
   sqflite_common_ffi: ^2.3.6
   path: ^1.9.1
   flutter_map: ^7.0.2
+  flutter_map_cache: ^2.1.0
+  http_cache_file_store: ^2.0.0
+  path_provider: ^2.1.5
+  url_launcher: ^6.3.2
   latlong2: ^0.9.1
 
 dev_dependencies:

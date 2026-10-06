@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0.0-rc.3 — 7 October 2026
+
+- Replaced the CARTO tiles requiring API keys with OpenStreetMap in both Driver
+  and Service maps. No map-provider account or key is needed.
+- Added visible, linked attribution and disk caching that respects HTTP expiry.
+  Only visible tiles are requested; both themes share downloads, with dark
+  styling applied locally. GPS, recording and server contracts are unchanged.
+
 ## 3.0.0-rc.2 — 7 October 2026
 
 - Fixed Android journal initialization: the WAL pragma returns a row and must use

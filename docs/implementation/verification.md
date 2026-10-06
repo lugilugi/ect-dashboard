@@ -230,3 +230,35 @@ analysis reported no issues; the full Flutter suite passed 92 tests with the
 server-only integration test skipped outside the disposable helper. This fix
 changes neither schema version nor wire contract. rc.2 is the signed APK update
 for the startup error, with physical-device confirmation still needed.
+
+## Map tile provider regression — 7 October 2026
+
+The rc.2 user reported CARTO's API-key watermark instead of the GPS basemap.
+Direct requests to the exact Voyager and Dark Matter templates both returned
+HTTP 200 image/png containing that watermark. CARTO's current primary-source
+notice confirms keyless requests produce it. This is a provider authorization
+change rather than a GPS decoding failure; checking only HTTP status would miss
+the regression. The fetched tiles were visually inspected before changing code.
+
+The shared RoadMapTileLayer now requests OpenStreetMap tiles, caches viewed tiles
+on disk with CachePolicy.request (HTTP expiry respected), identifies the app in
+User-Agent, and disables the tile pan buffer. Attribution is placed above the
+layers in both Driver and Service maps. Both themes share downloads; a local
+color filter provides the dark background. Cache storage is separate from the
+telemetry journal and the caching HTTP client closes on widget disposal.
+
+The replacement URL was obtained from the changed source and requested at the
+same z/x/y: HTTP 200 image/png, 31,865 bytes, with cache-control max-age and stale
+directives. Visual inspection confirmed streets rather than the key watermark.
+The external provider response cannot be locked down by a mocked tile URL test;
+live image verification is the relevant check here. Hardware verification of
+Driver/Service maps, theme switching, attribution and GPS overlays remains pending.
+No schema, journal reset, GPS contract or server change is introduced.
+
+Checks: pub get succeeded; full analyzer reported no issues; 92 Flutter tests
+passed with the server-only integration test skipped locally. The first UI pass
+caught attribution overflow in Driver's narrow map; a wrapping text attribution
+with explicit small typography fixed it, and the existing Driver/dashboard tests
+then passed. No new mock of the remote tile response was used as proof that maps
+work. The signed rc.3 build and remote CI outcomes are recorded in the release
+status artifact after publication.

@@ -166,6 +166,7 @@ class _DriverTrackMapState extends State<DriverTrackMap> {
                     ),
                 ],
               ),
+              const RoadMapAttribution(),
             ],
           ),
           if (!state.hasCurrentGpsSample)
