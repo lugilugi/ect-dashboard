@@ -234,6 +234,7 @@ class CanBindings {
   String? _positionId;
   String? _emittedPositionId;
   int _freshnessMs = 5000;
+  int _lapAtReception = 1;
   final GpsSourceManager gpsSourceManager;
 
   int _externalGpsSatellites = 0;
@@ -250,6 +251,7 @@ class CanBindings {
 
   void handle(DecodedCanMessage message, {required DateTime receivedAtUtc}) {
     _receivedAtUtc = receivedAtUtc;
+    _lapAtReception = state.lapNumber;
     _freshnessMs = ((message.definition.cycleTimeMs ?? 1000) * 3).clamp(
       1000,
       30000,
@@ -417,6 +419,7 @@ class CanBindings {
         source: binding.source,
         unit: binding.unit,
         canId: message.canId,
+        lapNumber: _lapAtReception,
         observedAtUtc: _receivedAtUtc,
         freshnessMs: _freshnessMs,
         sourceSampleId: message.canId == CanIds.gpsPosition

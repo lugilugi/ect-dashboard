@@ -31,6 +31,20 @@ TelemetryRecord metric(int seq) => TelemetryRecord.metric(
 
 void main() {
   setUpAll(sqfliteFfiInit);
+  test('identical records in one append remain idempotent', () async {
+    final dir = await Directory.systemTemp.createTemp('ect-duplicate-test-');
+    final journal = TelemetryJournal(
+      databasePath: '${dir.path}/journal.db',
+      factory: databaseFactoryFfi,
+      readableCopyEnabled: false,
+    );
+    addTearDown(() async {
+      await journal.close();
+      await dir.delete(recursive: true);
+    });
+    await journal.appendRecords([metric(1), metric(1)]);
+    expect((await journal.readPending()).length, 1);
+  });
   test(
     'old telemetry format resets once and subsequent restart preserves new rows',
     () async {

@@ -5,9 +5,10 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE TABLE schema_metadata (
   version integer PRIMARY KEY,
   contract text NOT NULL,
+  schema_sha256 text NOT NULL DEFAULT 'uninitialized',
   initialized_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-INSERT INTO schema_metadata VALUES (2, 'ect.telemetry.v2', clock_timestamp());
+INSERT INTO schema_metadata(version,contract) VALUES (2, 'ect.telemetry.v2');
 
 CREATE TABLE sessions (
   uid uuid PRIMARY KEY,
@@ -241,7 +242,7 @@ SELECT session_uid,source,source_sample_id,max(observed_at) AS time,
   max(value) FILTER(WHERE signal_name='GPS_Latitude_Deg') AS latitude,
   max(value) FILTER(WHERE signal_name='GPS_Longitude_Deg') AS longitude
 FROM telemetry_raw
-WHERE source_sample_id IS NOT NULL AND quality='ok'
+WHERE source_sample_id IS NOT NULL AND quality='ok' AND sample_kind='observation'
   AND signal_name IN ('GPS_Latitude_Deg','GPS_Longitude_Deg')
 GROUP BY session_uid,source,source_sample_id
 HAVING count(DISTINCT signal_name)=2;

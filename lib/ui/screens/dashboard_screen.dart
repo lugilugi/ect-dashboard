@@ -804,9 +804,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             ),
                           ],
                           // Backlog counter: hidden until the backlog is
-                          // actually significant (>= 100 pending batches), so
+                          // actually significant (>= 100 pending records), so
                           // normal small buffers never jitter the layout; the
                           // fixed width keeps it stable as the count grows.
+                          if (state.spoolHealth.rejectedRecordCount > 0)
+                            Text(
+                              'REJECTED RECORDS: ${state.spoolHealth.rejectedRecordCount}',
+                              style: TextStyle(color: Colors.red, fontSize: 12),
+                            ),
                           if (state.spoolHealth.storageError != null ||
                               state.spoolHealth.exportError != null) ...[
                             Text(

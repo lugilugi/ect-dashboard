@@ -23,7 +23,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB -Atc 'SELECT version FROM schema_metadata' | grep -qx 2",
+          "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB -Atc 'SELECT schema_sha256 FROM schema_metadata' | grep -qx $$(sha256sum /docker-entrypoint-initdb.d/01_schema.sql | cut -d' ' -f1)",
         ]
       interval: 5s
       timeout: 5s

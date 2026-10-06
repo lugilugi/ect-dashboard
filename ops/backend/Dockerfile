@@ -2,13 +2,15 @@
 FROM telegraf:1.31.3 AS ingest
 FROM grafana/grafana-oss:11.1.4 AS dashboards
 FROM timescale/timescaledb:2.17.2-pg16
-RUN apk add --no-cache supervisor tini mosquitto mosquitto-clients python3 py3-paho-mqtt     libstdc++ ca-certificates wget  && addgroup -S ect && adduser -S -G ect ect  && addgroup -S grafana && adduser -S -G grafana grafana
+RUN apk add --no-cache supervisor tini mosquitto mosquitto-clients python3 py3-pip     libstdc++ ca-certificates wget  && python3 -m venv /opt/csv-runtime \
+ && /opt/csv-runtime/bin/pip install --no-cache-dir paho-mqtt==2.1.0 \
+ && addgroup -S ect && adduser -S -G ect ect  && addgroup -S grafana && adduser -S -G grafana grafana
 COPY --from=ingest /usr/bin/telegraf /usr/bin/telegraf
 COPY --from=dashboards /usr/share/grafana /usr/share/grafana
 COPY ops/backend/supervisord.conf /etc/supervisord.conf
 COPY ops/backend/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY ops/backend/telegraf.conf /etc/telegraf/telegraf.conf
-COPY ops/backend/csv_streamer.py ops/backend/csv_server.py ops/backend/telemetry_contract.py /usr/local/bin/
+COPY ops/backend/csv_streamer.py ops/backend/csv_server.py ops/backend/telemetry_contract.py ops/backend/export_snapshot.py /usr/local/bin/
 COPY ops/backend/export_to_csv.sh ops/backend/wait-for-schema.sh ops/backend/healthcheck.sh /usr/local/bin/
 COPY ops/backend/docker-entrypoint.sh /usr/local/bin/ect-entrypoint.sh
 COPY db/schema.sql /docker-entrypoint-initdb.d/01_schema.sql

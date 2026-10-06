@@ -37,13 +37,6 @@ class ReadableLocalCopyWriter {
     required String? overrideDirectoryPath,
   }) async {}
 
-  Future<String?> appendSessionCsvRow({
-    required String sessionId,
-    required Map<String, Object?> row,
-  }) async {
-    return null;
-  }
-
   Future<void> flush() async {}
 
   Future<ReadableLocalCopyPreview> readPreview({

@@ -2,6 +2,7 @@
 """Independent at-least-once v2 MQTT archive; durable flush once per second."""
 
 import csv
+from collections import OrderedDict
 import json
 import os
 import signal
@@ -25,13 +26,18 @@ class CsvSink:
     def __init__(self, root):
         os.makedirs(root, exist_ok=True)
         self.root = root
-        self._handles = {}
+        self._handles = OrderedDict()
         self._lock = threading.RLock()
 
     def append(self, name, columns, row):
         with self._lock:
             handle = self._handles.get(name)
             if handle is None:
+                if len(self._handles) >= 32:
+                    _, (old_stream, _) = self._handles.popitem(last=False)
+                    old_stream.flush()
+                    os.fsync(old_stream.fileno())
+                    old_stream.close()
                 path = os.path.join(self.root, name)
                 new = not os.path.exists(path) or os.path.getsize(path) == 0
                 stream = open(path, "a", encoding="utf-8", newline="")
@@ -40,6 +46,7 @@ class CsvSink:
                 self._handles[name] = handle
                 if new:
                     writer.writerow(columns)
+            self._handles.move_to_end(name)
             handle[1].writerow(row)
 
     def reject(self, topic, payload, reason):

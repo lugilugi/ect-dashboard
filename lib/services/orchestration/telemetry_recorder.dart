@@ -36,6 +36,8 @@ class TelemetryRecorder {
   final List<TelemetryRecord> _buffer = [];
   Timer? _commitTimer;
   Timer? _snapshotTimer;
+  Timer? _retentionTimer;
+  int _captureLosses = 0;
   Future<void>? _flushing;
   bool _started = false;
   String _metadataKey = '';
@@ -93,6 +95,9 @@ class TelemetryRecorder {
       sampleFreshValues();
       unawaited(_flushSafely());
     });
+    _retentionTimer = Timer.periodic(const Duration(minutes: 30), (_) {
+      unawaited(_maintainRetention());
+    });
     await flush();
   }
 
@@ -104,9 +109,13 @@ class TelemetryRecorder {
     }
   }
 
-  void _enqueue(TelemetryRecord record) {
+  void _enqueue(TelemetryRecord record, {bool control = false}) {
     if (journal == null) return;
-    if (_buffer.length >= 256) {
+    final capacity = record.kind == TelemetryRecordKind.session || control
+        ? 256
+        : 240;
+    if (_buffer.length >= capacity) {
+      _captureLosses++;
       journal!.spoolHealth.updateRecordingErrors(
         storage: 'Capture buffer full; recording loss',
         export: journal!.spoolHealth.exportError,
@@ -162,6 +171,18 @@ class TelemetryRecorder {
   Future<void> _commit() async {
     final storage = journal;
     if (storage == null) return;
+    if (_captureLosses > 0 && _buffer.length < 256) {
+      final losses = _captureLosses;
+      _captureLosses = 0;
+      record(
+        'Recording_Loss',
+        losses.toDouble(),
+        source: 'app',
+        unit: 'count',
+        quality: 'invalid',
+        diagnostic: true,
+      );
+    }
     final records = List<TelemetryRecord>.of(_buffer);
     final active =
         state.sessionState == SessionState.logging ||
@@ -182,9 +203,27 @@ class TelemetryRecorder {
     _started = false;
     _commitTimer?.cancel();
     _snapshotTimer?.cancel();
+    _retentionTimer?.cancel();
     state.removeListener(_captureMetadata);
     await _flushing;
     await flush();
+  }
+
+  Future<void> _maintainRetention() async {
+    final storage = journal;
+    if (storage == null) return;
+    try {
+      await storage.flushExports();
+      await storage.prune();
+      await storage.pruneReadableCopyOlderThan(
+        Duration(days: state.readableCopyRetentionDays),
+      );
+    } catch (error) {
+      storage.spoolHealth.updateRecordingErrors(
+        storage: storage.spoolHealth.storageError,
+        export: error.toString(),
+      );
+    }
   }
 
   void restoreSequence(String sessionId, int sequence) {
@@ -236,6 +275,8 @@ class TelemetryRecorder {
           previous.source == source &&
           previous.quality == quality &&
           previous.unit == unit &&
+          previous.canId == canId &&
+          previous.freshnessMs == freshnessMs &&
           previous.sampleId == sourceSampleId) {
         return null;
       }
@@ -289,7 +330,7 @@ class TelemetryRecorder {
       sourceSampleId: observation.sampleId,
       freshnessMs: observation.freshnessMs,
     );
-    _enqueue(TelemetryRecord.metric(event));
+    _enqueue(TelemetryRecord.metric(event), control: kind == 'diagnostic');
     return event;
   }
 }

@@ -77,7 +77,6 @@ class TelemetryRuntimeCoordinator {
     state.onReadableCopyRetentionDaysChanged = null;
     state.onReadableCopyMaxFileBytesChanged = null;
     state.onSimulationToggleChanged = null;
-    state.onRequestMqttSpoolReset = null;
     state.onRequestLocalStorageClear = null;
     _driverAlertService?.stop();
     if (_foregroundServiceRunning) {
@@ -185,7 +184,6 @@ class TelemetryRuntimeCoordinator {
     state.onUsbPortSelectionChanged = _usbService.applyPortSelection;
     state.onUsbBaudRateChanged = _usbService.applyBaudRate;
     state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
-    state.onRequestMqttSpoolReset = _resetLocalStorage;
     state.onRequestLocalStorageClear = _resetLocalStorage;
 
     state.addListener(_handleStateChanged);
@@ -228,7 +226,7 @@ class TelemetryRuntimeCoordinator {
     );
     _recorder.record(
       'GPS_Heading_Deg',
-      sample.headingDeg.isNaN ? 0.0 : sample.headingDeg,
+      sample.headingDeg,
       source: 'phone_gps',
       observedAtUtc: sample.timestampUtc,
       sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),

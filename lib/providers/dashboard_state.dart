@@ -621,6 +621,8 @@ class DashboardState extends ChangeNotifier {
     sessionStartedAtUtc = DateTime.now().toUtc();
     sessionEndedAtUtc = null;
     metadataRevision = 0;
+    _lapCrossings.clear();
+    _lapBoundaryService.resetTracking();
 
     final armedControl = _sessionOrchestrator.arm(control: sessionControlState);
     _applySessionControlState(armedControl);
@@ -1226,7 +1228,6 @@ class DashboardState extends ChangeNotifier {
 
   void Function(String)? onUsbTx;
 
-  Future<void> Function()? onRequestMqttSpoolReset;
   Future<void> Function()? onRequestLocalStorageClear;
 
   void sendUsbCommand(String cmd) {
@@ -1381,6 +1382,9 @@ class DashboardState extends ChangeNotifier {
   }
 
   void clearCurrentState() {
+    if (_sessionId.isNotEmpty && _sessionState != SessionState.ended) {
+      stopSession(abort: true);
+    }
     resetTelemetry();
     resetSessionState();
     lastCanPayloads.clear();

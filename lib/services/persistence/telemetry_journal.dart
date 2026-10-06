@@ -138,7 +138,16 @@ class TelemetryJournal {
       var rejected = false;
       await _db!.transaction((tx) async {
         final additions = <TelemetryRecord>[];
+        final withinBatch = <String, String>{};
         for (final record in records) {
+          final prior = withinBatch[record.key];
+          if (prior != null) {
+            if (prior != record.payloadJson) {
+              throw StateError('Conflicting journal identity: ${record.key}');
+            }
+            continue;
+          }
+          withinBatch[record.key] = record.payloadJson;
           final rows = await tx.query(
             'journal',
             where: 'record_key=?',

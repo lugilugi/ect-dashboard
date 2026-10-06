@@ -38,7 +38,10 @@ UTC timestamps are RFC3339 with Z and at most microsecond precision.
 
 Identity is (session_uid, seq_in_session). Retrying preserves content and time;
 SQL's time-partitioned unique index also includes immutable event time.
-Conflicting retries are diagnosed rather than overwritten.
+Conflicting content at the same identity/time is diagnosed rather than overwritten.
+SQL partition uniqueness relies on immutable retry time; a broken publisher that
+reuses a sequence with a different time is a contract violation not globally
+prevented by that index. Reconciliation detects missing/unexpected identities.
 
 Observation event time is original CAN receipt/GPS time. Snapshot event time is
 the sampler tick; observed_at_utc retains source time and controls freshness.
@@ -54,3 +57,9 @@ exact boundary time. Session start and those events define lap bounds.
 
 Transport and CSV are at-least-once. broker_acked does not mean SQL/CSV commit.
 CSV carries the same identities, observation fields and source metadata.
+
+GPS read models use original observation records, excluding sampler snapshots,
+so a cached fix retains its original lap even while newer laps are active.
+The CAN frame that triggers a distance crossing closes the preceding lap;
+subsequent frames belong to the new lap. Sparse boundary timing and deltas remain
+estimates over received samples, not interpolated hardware measurements.

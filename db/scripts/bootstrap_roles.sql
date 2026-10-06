@@ -1,6 +1,15 @@
 -- Fresh initialization only. Password values arrive as safely quoted psql variables.
-CREATE ROLE telegraf_ingest LOGIN PASSWORD :'ingest_password';
-CREATE ROLE grafana_reader LOGIN PASSWORD :'reader_password';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='telegraf_ingest') THEN
+    CREATE ROLE telegraf_ingest;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='grafana_reader') THEN
+    CREATE ROLE grafana_reader;
+  END IF;
+END $$;
+ALTER ROLE telegraf_ingest LOGIN PASSWORD :'ingest_password';
+ALTER ROLE grafana_reader LOGIN PASSWORD :'reader_password';
+UPDATE schema_metadata SET schema_sha256=:'schema_hash' WHERE version=2;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"db" TO telegraf_ingest, grafana_reader;
 GRANT USAGE ON SCHEMA public TO telegraf_ingest, grafana_reader;
