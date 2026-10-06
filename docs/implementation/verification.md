@@ -198,3 +198,14 @@ codex/backend-clean-reset. Stage 08 is ac4b857; stage 09 is this documentation
 commit. Keep the full branch together for qualification/cutover. Successful and
 previously retained task containers/volumes were selectively removed; unrelated
 Docker resources and downloaded image caches are preserved.
+
+## Prerelease publication request
+
+After the nine implementation stages and local verification, the user explicitly
+requested a push and release. v3.0.0-rc.1 is prepared for qualification, preserving
+the pending hardware gate. CI now runs on the implementation branch; the existing
+signed Android workflow marks hyphenated tags as prereleases and keeps them out
+of Latest. Remote CI, APK and publication outcomes are recorded in the release
+status artifact; earlier no-push/no-release statements describe the initial local
+verification checkpoint. No production deployment/reset is authorized by this
+publication request.
