@@ -59,6 +59,8 @@ services:
       MQTT_PORT: 1883
       TOPIC_EVENTS: ${TOPIC_EVENTS:-telemetry/eco_archers/events}
       TOPIC_SESSIONS: ${TOPIC_SESSIONS:-telemetry/eco_archers/sessions}
+      TELEGRAF_EVENTS_CLIENT_ID: ect-telegraf-events-v2-compose
+      TELEGRAF_SESSIONS_CLIENT_ID: ect-telegraf-sessions-v2-compose
       TS_HOST: timescaledb
       TS_PORT: 5432
       TS_DB: ${POSTGRES_DB:-telemetry}
@@ -83,6 +85,7 @@ services:
       TOPIC_EVENTS: ${TOPIC_EVENTS:-telemetry/eco_archers/events}
       TOPIC_SESSIONS: ${TOPIC_SESSIONS:-telemetry/eco_archers/sessions}
       EXPORT_DIR: /exports
+      CSV_CLIENT_ID: ect-csv-v2-compose
     volumes:
       - ../../csv_exports:/exports
     networks:

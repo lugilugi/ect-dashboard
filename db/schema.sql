@@ -1,114 +1,247 @@
--- =============================================================================
--- ECT telemetry schema (fresh installs only; wipe the data volume to re-apply)
--- No retention policies: all telemetry is kept indefinitely.
--- =============================================================================
-
--- Enable TimescaleDB (required for hypertables/compression below).
+-- Fresh v2 schema only. Coordinated reset is an explicit release operation.
+-- Telegraf COPY tags stay TEXT in ingest views; owned tables use typed columns.
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
--- Enable UUID generation extension if not active.
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE TABLE schema_metadata (
+  version integer PRIMARY KEY,
+  contract text NOT NULL,
+  initialized_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO schema_metadata VALUES (2, 'ect.telemetry.v2', clock_timestamp());
 
--- 1. Sessions: one row per run. vehicle_setup is manual/API-only (Telegraf
---    cannot ingest nested JSON, so it is never written by the pipeline).
 CREATE TABLE sessions (
-    uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_name VARCHAR(100) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    vehicle_setup JSONB
+  uid uuid PRIMARY KEY,
+  session_name text NOT NULL CHECK (length(session_name) BETWEEN 1 AND 100),
+  started_at timestamptz NOT NULL,
+  ended_at timestamptz,
+  session_state text NOT NULL CHECK (session_state IN ('IDLE','ARMED','LOGGING','ENDED')),
+  laps_completed integer NOT NULL CHECK (laps_completed >= 0),
+  metadata_revision bigint NOT NULL CHECK (metadata_revision > 0),
+  received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
--- 2. Laps: optional explicit boundaries; race analysis derives laps from
---    telemetry_raw.lap_number (kept for manual/API use).
-CREATE TABLE laps (
-    id SERIAL PRIMARY KEY,
-    session_uid UUID NOT NULL REFERENCES sessions(uid) ON DELETE CASCADE,
-    lap_number INT NOT NULL,
-    started_at TIMESTAMPTZ NOT NULL,
-    ended_at TIMESTAMPTZ,
-    UNIQUE (session_uid, lap_number)
-);
-
--- 3. Core time-series sink: narrow EAV rows written by Telegraf COPY.
---    signal_name is intentionally free-form (any signal following the batch
---    format is accepted; nothing needs to be pre-registered).
---    NOTE ON TYPES: telegraf's outputs.postgresql plugin (>=1.31, pgx v4)
---    writes rows via COPY ... FROM STDIN BINARY, encoding every metric TAG as
---    a string against the column's declared type. Tag columns therefore MUST
---    be TEXT here; cast in queries when numeric semantics are needed.
 CREATE TABLE telemetry_raw (
-    time TIMESTAMPTZ NOT NULL,
-    session_uid TEXT NOT NULL,
-    lap_number TEXT,
-    signal_name TEXT NOT NULL,
-    value DOUBLE PRECISION NOT NULL,
-    ts_session_ms TEXT,
-    seq_in_session_start TEXT,
-    seq_in_session_end TEXT
+  time timestamptz NOT NULL,
+  session_uid uuid NOT NULL,
+  seq_in_session bigint NOT NULL CHECK (seq_in_session > 0),
+  observed_at timestamptz NOT NULL,
+  ts_session_ms bigint NOT NULL CHECK (ts_session_ms >= 0),
+  lap_number integer CHECK (lap_number > 0),
+  session_state text NOT NULL CHECK (session_state IN ('IDLE','ARMED','LOGGING','ENDED')),
+  lap_phase text,
+  signal_name text NOT NULL CHECK (length(signal_name) BETWEEN 1 AND 128),
+  value double precision NOT NULL,
+  unit text CHECK (length(unit) BETWEEN 1 AND 32),
+  source text NOT NULL CHECK (length(source) BETWEEN 1 AND 64),
+  quality text NOT NULL CHECK (length(quality) BETWEEN 1 AND 32),
+  sample_kind text NOT NULL CHECK (sample_kind IN ('observation','snapshot','diagnostic')),
+  source_sample_id text CHECK (length(source_sample_id) BETWEEN 1 AND 128),
+  can_id integer CHECK (can_id BETWEEN 0 AND 536870911),
+  freshness_ms integer NOT NULL DEFAULT 5000 CHECK (freshness_ms > 0),
+  received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(time, session_uid, seq_in_session)
 );
-
--- 4. Convert the sink to a TimescaleDB hypertable partitioned by time.
 SELECT create_hypertable('telemetry_raw', 'time', chunk_time_interval => INTERVAL '1 day');
-
--- 5. Lookups used by the live overview (2s refresh) and lap analysis.
-CREATE INDEX idx_telemetry_lookup
-ON telemetry_raw (session_uid, signal_name, time DESC);
-
-CREATE INDEX idx_telemetry_lap_lookup
-ON telemetry_raw (session_uid, lap_number, signal_name, time DESC);
-
--- 6. Compression keeps the ever-growing table queryable; no data is dropped.
+CREATE INDEX telemetry_lookup ON telemetry_raw(session_uid, signal_name, observed_at DESC, seq_in_session DESC);
+CREATE INDEX telemetry_lap_lookup ON telemetry_raw(session_uid, lap_number, time);
 ALTER TABLE telemetry_raw SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'session_uid, signal_name',
-    timescaledb.compress_orderby = 'time DESC'
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'session_uid,signal_name',
+  timescaledb.compress_orderby = 'time DESC,seq_in_session DESC'
+);
+SELECT add_compression_policy('telemetry_raw', INTERVAL '2 hours');
+
+CREATE TABLE ingest_rejections (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  kind text NOT NULL,
+  reason text NOT NULL,
+  payload jsonb NOT NULL
 );
 
-DO $$
-BEGIN
-  PERFORM add_compression_policy('telemetry_raw', INTERVAL '2 hours');
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
-  WHEN undefined_function THEN
-    RAISE NOTICE 'Timescale policy function unavailable: add_compression_policy';
-END $$;
+-- Empty typed COPY views. The plugin's time is NOT array element capture time.
+CREATE VIEW telemetry_ingest_view AS SELECT
+  NULL::timestamptz AS time, NULL::text AS schema_version,
+  NULL::text AS session_uid, NULL::text AS seq_in_session,
+  NULL::text AS ts_wall_utc, NULL::text AS observed_at_utc,
+  NULL::text AS ts_session_ms, NULL::text AS lap_number,
+  NULL::text AS session_state, NULL::text AS lap_phase,
+  NULL::text AS signal_name, NULL::double precision AS value,
+  NULL::text AS unit, NULL::text AS source, NULL::text AS quality,
+  NULL::text AS sample_kind, NULL::text AS source_sample_id,
+  NULL::text AS can_id, NULL::text AS freshness_ms WHERE false;
 
--- 7. Writable ingestion view & trigger for session UPSERT.
---    The view is the telegraf COPY target, so its columns must match what the
---    plugin writes: uid arrives as a string (text), session_name as text.
-CREATE OR REPLACE VIEW sessions_ingest_view AS
-SELECT
-  uid::text AS uid,
-  session_name,
-  vehicle_setup,
-  created_at AS time
-FROM sessions;
-
-CREATE OR REPLACE FUNCTION upsert_session_ingest()
-RETURNS TRIGGER AS $$
+CREATE FUNCTION ingest_metric() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE candidate telemetry_raw%ROWTYPE; existing telemetry_raw%ROWTYPE;
 BEGIN
-  INSERT INTO sessions (
-    uid,
-    session_name,
-    vehicle_setup
-  )
-  VALUES (
-    NEW.uid::uuid,
-    COALESCE(NEW.session_name, 'UNKNOWN_SESSION'),
-    NEW.vehicle_setup
-  )
-  ON CONFLICT (uid)
-  DO UPDATE SET
-    session_name = COALESCE(EXCLUDED.session_name, sessions.session_name),
-    vehicle_setup = COALESCE(EXCLUDED.vehicle_setup, sessions.vehicle_setup),
-    updated_at = now();
+  IF NEW.schema_version IS DISTINCT FROM '2'
+     OR NEW.ts_wall_utc IS NULL OR NEW.ts_wall_utc !~ 'Z$'
+     OR NEW.observed_at_utc IS NULL OR NEW.observed_at_utc !~ 'Z$'
+     OR NEW.source IS NULL OR length(NEW.source) NOT BETWEEN 1 AND 64
+     OR NEW.quality IS NULL OR length(NEW.quality) NOT BETWEEN 1 AND 32
+     OR NEW.session_state IS NULL OR NEW.session_state NOT IN ('IDLE','ARMED','LOGGING','ENDED')
+     OR NEW.value IS NULL
+     OR NEW.value IN ('NaN'::float8,'Infinity'::float8,'-Infinity'::float8)
+  THEN RAISE EXCEPTION 'invalid metric contract' USING ERRCODE = '22023'; END IF;
+
+  candidate.time := NEW.ts_wall_utc::timestamptz;
+  candidate.session_uid := NEW.session_uid::uuid;
+  candidate.seq_in_session := NEW.seq_in_session::bigint;
+  candidate.observed_at := NEW.observed_at_utc::timestamptz;
+  candidate.ts_session_ms := NEW.ts_session_ms::bigint;
+  candidate.lap_number := NEW.lap_number::integer;
+  candidate.session_state := NEW.session_state;
+  candidate.lap_phase := NEW.lap_phase;
+  candidate.signal_name := NEW.signal_name;
+  candidate.value := NEW.value;
+  candidate.unit := NEW.unit;
+  candidate.source := NEW.source;
+  candidate.quality := NEW.quality;
+  candidate.sample_kind := NEW.sample_kind;
+  candidate.source_sample_id := NEW.source_sample_id;
+  candidate.can_id := NEW.can_id::integer;
+  candidate.freshness_ms := COALESCE(NEW.freshness_ms::integer, 5000);
+  candidate.received_at := clock_timestamp();
+
+  INSERT INTO telemetry_raw SELECT (candidate).*
+    ON CONFLICT (time,session_uid,seq_in_session) DO NOTHING;
+  IF NOT FOUND THEN
+    SELECT * INTO existing FROM telemetry_raw
+      WHERE time = candidate.time AND session_uid = candidate.session_uid
+        AND seq_in_session = candidate.seq_in_session;
+    IF (to_jsonb(existing) - 'received_at') IS DISTINCT FROM
+       (to_jsonb(candidate) - 'received_at') THEN
+      INSERT INTO ingest_rejections(kind,reason,payload)
+        VALUES ('metric','conflicting duplicate',to_jsonb(NEW));
+    END IF;
+  END IF;
   RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+EXCEPTION WHEN invalid_text_representation OR invalid_parameter_value
+  OR numeric_value_out_of_range OR datetime_field_overflow
+  OR invalid_datetime_format OR check_violation OR not_null_violation THEN
+  INSERT INTO ingest_rejections(kind,reason,payload)
+    VALUES ('metric',SQLERRM,to_jsonb(NEW));
+  RETURN NULL;
+END $$;
+CREATE TRIGGER ingest_metric_trigger INSTEAD OF INSERT ON telemetry_ingest_view
+  FOR EACH ROW EXECUTE FUNCTION ingest_metric();
 
-DROP TRIGGER IF EXISTS trigger_upsert_session_ingest ON sessions_ingest_view;
-CREATE TRIGGER trigger_upsert_session_ingest
-INSTEAD OF INSERT ON sessions_ingest_view
-FOR EACH ROW
-EXECUTE FUNCTION upsert_session_ingest();
+CREATE VIEW sessions_ingest_view AS SELECT
+  NULL::timestamptz AS time, NULL::text AS schema_version,
+  NULL::text AS uid, NULL::text AS session_name,
+  NULL::text AS started_at_utc, NULL::text AS ended_at_utc,
+  NULL::text AS session_state, NULL::text AS laps_completed,
+  NULL::text AS metadata_revision WHERE false;
+
+CREATE FUNCTION ingest_session() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE existing sessions%ROWTYPE;
+BEGIN
+  IF NEW.schema_version IS DISTINCT FROM '2' OR NEW.started_at_utc IS NULL
+     OR NEW.started_at_utc !~ 'Z$'
+     OR (NEW.ended_at_utc IS NOT NULL AND NEW.ended_at_utc !~ 'Z$')
+     OR (NEW.session_state = 'ENDED' AND NEW.ended_at_utc IS NULL) THEN
+    RAISE EXCEPTION 'invalid session contract' USING ERRCODE = '22023';
+  END IF;
+  INSERT INTO sessions(uid,session_name,started_at,ended_at,session_state,
+                       laps_completed,metadata_revision)
+    VALUES (NEW.uid::uuid,NEW.session_name,NEW.started_at_utc::timestamptz,
+            NEW.ended_at_utc::timestamptz,NEW.session_state,
+            NEW.laps_completed::integer,NEW.metadata_revision::bigint)
+    ON CONFLICT (uid) DO UPDATE SET
+      session_name = EXCLUDED.session_name, started_at = EXCLUDED.started_at,
+      ended_at = EXCLUDED.ended_at, session_state = EXCLUDED.session_state,
+      laps_completed = EXCLUDED.laps_completed,
+      metadata_revision = EXCLUDED.metadata_revision, updated_at = clock_timestamp()
+    WHERE EXCLUDED.metadata_revision > sessions.metadata_revision;
+  IF NOT FOUND THEN
+    SELECT * INTO existing FROM sessions WHERE uid = NEW.uid::uuid;
+    IF existing.metadata_revision = NEW.metadata_revision::bigint AND
+      ROW(existing.session_name,existing.started_at,existing.ended_at,
+          existing.session_state,existing.laps_completed) IS DISTINCT FROM
+      ROW(NEW.session_name,NEW.started_at_utc::timestamptz,NEW.ended_at_utc::timestamptz,
+          NEW.session_state,NEW.laps_completed::integer) THEN
+      INSERT INTO ingest_rejections(kind,reason,payload)
+        VALUES ('session','conflicting duplicate revision',to_jsonb(NEW));
+    END IF;
+  END IF;
+  RETURN NEW;
+EXCEPTION WHEN invalid_text_representation OR invalid_parameter_value
+  OR numeric_value_out_of_range OR datetime_field_overflow
+  OR invalid_datetime_format OR check_violation OR not_null_violation THEN
+  INSERT INTO ingest_rejections(kind,reason,payload)
+    VALUES ('session',SQLERRM,to_jsonb(NEW));
+  RETURN NULL;
+END $$;
+CREATE TRIGGER ingest_session_trigger INSTEAD OF INSERT ON sessions_ingest_view
+  FOR EACH ROW EXECUTE FUNCTION ingest_session();
+
+CREATE VIEW telemetry_samples AS SELECT * FROM telemetry_raw;
+CREATE VIEW session_catalog AS
+WITH bounds AS (
+  SELECT session_uid, min(time) AS first_sample_at, max(time) AS last_sample_at
+    FROM telemetry_raw GROUP BY session_uid
+), ids AS (
+  SELECT uid FROM sessions UNION SELECT session_uid FROM bounds
+)
+SELECT ids.uid, COALESCE(s.session_name, ids.uid::text) AS session_name,
+  COALESCE(s.started_at,b.first_sample_at) AS started_at,
+  s.ended_at, s.session_state, s.laps_completed, s.metadata_revision,
+  b.first_sample_at,b.last_sample_at
+FROM ids LEFT JOIN sessions s USING(uid) LEFT JOIN bounds b ON b.session_uid=ids.uid;
+
+CREATE VIEW latest_signals AS
+SELECT DISTINCT ON(session_uid,signal_name) *,
+  observed_at <= clock_timestamp() + INTERVAL '1 second'
+  AND observed_at >= clock_timestamp() - freshness_ms * INTERVAL '1 millisecond'
+  AND quality = 'ok' AS is_fresh
+FROM telemetry_raw
+WHERE sample_kind <> 'diagnostic'
+ORDER BY session_uid,signal_name,observed_at DESC,seq_in_session DESC;
+
+CREATE VIEW lap_bounds AS
+WITH crossings AS (
+  SELECT session_uid,lap_number,min(time) AS ended_at,min(ts_session_ms) AS ended_ms
+  FROM telemetry_raw WHERE signal_name='Lap_Completed' AND sample_kind='diagnostic'
+  GROUP BY session_uid,lap_number
+), numbered AS (
+  SELECT *,lag(ended_at) OVER(PARTITION BY session_uid ORDER BY lap_number) AS previous_end,
+    lag(ended_ms,1,0::bigint) OVER(PARTITION BY session_uid ORDER BY lap_number) AS previous_ms
+  FROM crossings
+)
+SELECT n.session_uid,n.lap_number,COALESCE(n.previous_end,s.started_at) AS started_at,
+  n.ended_at,(n.ended_ms-n.previous_ms)/1000.0 AS duration_seconds
+FROM numbered n LEFT JOIN sessions s ON s.uid=n.session_uid;
+
+CREATE VIEW accumulator_deltas AS
+WITH ordered AS (
+  SELECT *,lag(value) OVER(PARTITION BY session_uid,signal_name
+      ORDER BY ts_session_ms,seq_in_session) AS previous_value
+  FROM telemetry_raw WHERE signal_name IN ('Joules_780','Distance_Km') AND quality='ok'
+)
+SELECT *,CASE WHEN previous_value IS NULL THEN NULL
+  WHEN value >= previous_value THEN value-previous_value ELSE GREATEST(value,0) END AS delta
+FROM ordered;
+
+CREATE VIEW session_totals AS
+SELECT session_uid,
+  sum(delta) FILTER(WHERE signal_name='Joules_780') AS energy_j,
+  sum(delta) FILTER(WHERE signal_name='Distance_Km') AS distance_km
+FROM accumulator_deltas GROUP BY session_uid;
+
+CREATE VIEW lap_totals AS
+SELECT session_uid,lap_number,
+  sum(delta) FILTER(WHERE signal_name='Joules_780') AS energy_j,
+  sum(delta) FILTER(WHERE signal_name='Distance_Km') AS distance_km
+FROM accumulator_deltas GROUP BY session_uid,lap_number;
+
+CREATE VIEW gps_fixes AS
+SELECT session_uid,source,source_sample_id,max(observed_at) AS time,
+  max(lap_number) AS lap_number,
+  max(value) FILTER(WHERE signal_name='GPS_Latitude_Deg') AS latitude,
+  max(value) FILTER(WHERE signal_name='GPS_Longitude_Deg') AS longitude
+FROM telemetry_raw
+WHERE source_sample_id IS NOT NULL AND quality='ok'
+  AND signal_name IN ('GPS_Latitude_Deg','GPS_Longitude_Deg')
+GROUP BY session_uid,source,source_sample_id
+HAVING count(DISTINCT signal_name)=2;

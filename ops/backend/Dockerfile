@@ -81,6 +81,7 @@ COPY ops/backend/telegraf.conf /etc/telegraf/telegraf.conf
 COPY ops/backend/export_to_csv.sh /usr/local/bin/export_to_csv.sh
 COPY ops/backend/csv_server.py /usr/local/bin/csv_server.py
 COPY ops/backend/csv_streamer.py /usr/local/bin/csv_streamer.py
+COPY ops/backend/telemetry_contract.py /usr/local/bin/telemetry_contract.py
 COPY ops/backend/docker-entrypoint.sh /usr/local/bin/ect-entrypoint.sh
 COPY db/schema.sql /docker-entrypoint-initdb.d/01_schema.sql
 # Provisioning goes in a dedicated dir (not /etc/grafana/provisioning, which
@@ -100,6 +101,9 @@ ENV POSTGRES_DB=telemetry \
     POSTGRES_PASSWORD=postgres \
     GRAFANA_ADMIN_USER=admin \
     GRAFANA_ADMIN_PASSWORD=admin \
+    TELEGRAF_EVENTS_CLIENT_ID=ect-telegraf-events-v2-single \
+    TELEGRAF_SESSIONS_CLIENT_ID=ect-telegraf-sessions-v2-single \
+    CSV_CLIENT_ID=ect-csv-v2-single \
     TOPIC_EVENTS=telemetry/eco_archers/events \
     TOPIC_SESSIONS=telemetry/eco_archers/sessions \
     MQTT_HOST=127.0.0.1 \
