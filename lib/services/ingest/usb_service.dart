@@ -2,11 +2,10 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
+import 'package:telemetry_dashboard/services/orchestration/telemetry_recorder.dart';
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
 import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
-import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
 import 'package:telemetry_dashboard/repositories/can_ingest_repository.dart';
 import 'package:usb_serial/transaction.dart';
 import 'package:usb_serial/usb_serial.dart';
@@ -109,20 +108,17 @@ class UsbService {
   int _mockGpsSequence = 0;
 
   final CanTxService? canTxService;
-  final LocalSpoolService? localSpoolService;
   final CanIngestRepository? canIngestRepository;
   final CanBindings canBindings;
 
   UsbService(
     this.state,
-    MqttService mqttService,
+    TelemetryRecorder recorder,
     GpsSourceManager gpsSourceManager, {
     this.canTxService,
-    this.localSpoolService,
     this.canIngestRepository,
     CanBindings? bindings,
-  }) : canBindings =
-           bindings ?? CanBindings(state, mqttService, gpsSourceManager);
+  }) : canBindings = bindings ?? CanBindings(state, recorder, gpsSourceManager);
 
   void sendString(String data) {
     final bytes = Uint8List.fromList(data.codeUnits);

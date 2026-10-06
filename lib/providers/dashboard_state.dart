@@ -10,7 +10,7 @@ import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 import 'package:telemetry_dashboard/services/orchestration/session_orchestrator.dart';
-import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
+import 'package:telemetry_dashboard/services/persistence/spool_health_store.dart';
 import 'package:telemetry_dashboard/services/persistence/readable_local_copy_writer.dart';
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
@@ -360,6 +360,10 @@ class DashboardState extends ChangeNotifier {
 
   bool get isLogging => _isLogging;
   String get sessionName => _sessionName;
+  DateTime? sessionStartedAtUtc;
+  DateTime? sessionEndedAtUtc;
+  int metadataRevision = 0;
+
   String get sessionId => _sessionId;
   UiMode get uiMode => _uiMode;
   SessionState get sessionState => _sessionState;
@@ -422,7 +426,7 @@ class DashboardState extends ChangeNotifier {
 
   @visibleForTesting
   String get oldestUnsentAgeText {
-    if (unsentBatchCount <= 0) {
+    if (pendingRecordCount <= 0) {
       return '0.0s';
     }
 
@@ -437,10 +441,10 @@ class DashboardState extends ChangeNotifier {
   }
 
   String get spoolUsageText {
-    if (spoolPendingBatchCapacity <= 0) {
+    if (spoolByteCapacity <= 0) {
       return '--';
     }
-    return '$spoolPendingBatchCount/$spoolPendingBatchCapacity';
+    return '${(spoolPendingBytes / 1048576).toStringAsFixed(1)}/${(spoolByteCapacity / 1048576).round()} MiB';
   }
 
   bool get gpsPermissionsHealthy =>
@@ -489,6 +493,9 @@ class DashboardState extends ChangeNotifier {
       lapNumber: lapNumber,
       sessionTimeSeconds: sessionTimeSeconds,
       lastSeqInSession: max(0, lastSeqInSession),
+      elapsedMs: sessionElapsedMs,
+      metadataRevision: metadataRevision,
+      startedAtUtc: sessionStartedAtUtc,
       gpsLocked: gpsLocked,
       usingPhoneGpsFallback: usingPhoneGpsFallback,
       lapDividerMode: lapDividerMode,
@@ -501,6 +508,8 @@ class DashboardState extends ChangeNotifier {
   void restoreFromCheckpoint(SessionCheckpointSnapshot snapshot) {
     _sessionId = snapshot.sessionId;
     _sessionName = snapshot.sessionName;
+    sessionStartedAtUtc = snapshot.startedAtUtc ?? snapshot.updatedAtUtc;
+    sessionEndedAtUtc = null;
     lapNumber = max(1, snapshot.lapNumber);
     sessionTimeSeconds = max(0, snapshot.sessionTimeSeconds);
     gpsLocked = snapshot.gpsLocked;
@@ -520,6 +529,10 @@ class DashboardState extends ChangeNotifier {
     startBlockReason = null;
     endBlockReason = null;
     _applySessionControlState(snapshot.controlState);
+    metadataRevision = snapshot.metadataRevision;
+    _sessionControl.restoreElapsedMs(
+      snapshot.elapsedMs ?? snapshot.sessionTimeSeconds * 1000,
+    );
     _lapBoundaryService.resetTracking();
     _lapBoundaryService.setDeadzone(Duration(milliseconds: crossingDeadzoneMs));
 
@@ -604,7 +617,10 @@ class DashboardState extends ChangeNotifier {
   bool startSession(String name) {
     final resolvedName = name.isEmpty ? generateDefaultName() : name;
     _sessionId = const Uuid().v4();
-    _sessionName = resolvedName;
+    _sessionName = resolvedName.substring(0, min(100, resolvedName.length));
+    sessionStartedAtUtc = DateTime.now().toUtc();
+    sessionEndedAtUtc = null;
+    metadataRevision = 0;
 
     final armedControl = _sessionOrchestrator.arm(control: sessionControlState);
     _applySessionControlState(armedControl);
@@ -633,15 +649,6 @@ class DashboardState extends ChangeNotifier {
 
   // STOP SESSION
   bool stopSession({bool abort = false}) {
-    if (!abort &&
-        _spoolHealth.requiresReplayDrainBeforeStop &&
-        unsentBatchCount > 0) {
-      endBlockReason =
-          'Stop blocked until recovered-session replay backlog is drained.';
-      notifyListeners();
-      return false;
-    }
-
     final decision = _sessionOrchestrator.requestStop(
       control: sessionControlState,
       nowUtc: DateTime.now().toUtc(),
@@ -654,6 +661,7 @@ class DashboardState extends ChangeNotifier {
       return false;
     }
 
+    sessionEndedAtUtc = DateTime.now().toUtc();
     _applySessionControlState(decision.nextControl);
     endBlockReason = null;
     notifyListeners();
@@ -675,6 +683,7 @@ class DashboardState extends ChangeNotifier {
       return;
     }
     lapsCompleted = bounded;
+    metadataRevision++;
     notifyListeners();
   }
 
@@ -729,6 +738,10 @@ class DashboardState extends ChangeNotifier {
   }
 
   void _applySessionControlState(SessionControlState control) {
+    if (control.sessionState != _sessionState ||
+        control.lapsCompleted != lapsCompleted) {
+      metadataRevision++;
+    }
     _sessionControl.applyControlState(control);
   }
 
@@ -743,8 +756,10 @@ class DashboardState extends ChangeNotifier {
   void resetSessionState() {
     _sessionName = '';
     _sessionId = '';
+    sessionStartedAtUtc = null;
+    sessionEndedAtUtc = null;
+    metadataRevision = 0;
     _sessionControl.reset();
-    _spoolHealth.clearReplayDrainGate();
     startBlockReason = null;
     endBlockReason = null;
     lastCrossingReason = null;
@@ -887,10 +902,10 @@ class DashboardState extends ChangeNotifier {
   // Connections
   bool isConnected = false;
   bool isServerConnected = false;
-  int get unsentBatchCount => _spoolHealth.pendingPublishCount;
+  int get pendingRecordCount => _spoolHealth.pendingPublishCount;
   int get oldestUnsentAgeMs => _spoolHealth.oldestAgeMs;
-  int get spoolPendingBatchCount => _spoolHealth.pendingBatchCount;
-  int get spoolPendingBatchCapacity => _spoolHealth.pendingBatchCapacity;
+  int get spoolPendingBytes => _spoolHealth.pendingBytes;
+  int get spoolByteCapacity => _spoolHealth.byteCapacity;
   bool get spoolCapacityWarning => _spoolHealth.capacityWarning;
   @visibleForTesting
   int get recoveryResumeCount => _spoolHealth.recoveryResumeCount;
@@ -1599,12 +1614,12 @@ class DashboardState extends ChangeNotifier {
 
   @visibleForTesting
   void updateSpoolHealth({
-    required int pendingBatchCount,
-    required int pendingBatchCapacity,
+    required int pendingBytes,
+    required int byteCapacity,
   }) {
     _spoolHealth.updatePendingCapacity(
-      pendingBatchCount: pendingBatchCount,
-      pendingBatchCapacity: pendingBatchCapacity,
+      pendingBytes: pendingBytes,
+      byteCapacity: byteCapacity,
     );
   }
 
@@ -1915,6 +1930,14 @@ class DashboardState extends ChangeNotifier {
     );
     _applySessionControlState(nextControl);
     lapNumber = max(1, lapsCompleted + 1);
+    if (currentGpsLat != null && currentGpsLon != null) {
+      _recordLapCrossing(
+        lapNumber: lapsCompleted,
+        lat: currentGpsLat!,
+        lon: currentGpsLon!,
+        tsWallUtc: DateTime.now().toUtc(),
+      );
+    }
     lastCrossingReason = null;
   }
 

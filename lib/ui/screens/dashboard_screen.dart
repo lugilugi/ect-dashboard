@@ -199,12 +199,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       final stopped = state.stopSession();
       if (!stopped) {
         messenger.showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      state.endBlockReason ??
-                          'Stop blocked (replay backlog must drain first).',
-                    ),
-                  ),
+          SnackBar(
+            content: Text(
+              state.endBlockReason ??
+                  'Stop blocked (replay backlog must drain first).',
+            ),
+          ),
         );
       }
     } else {
@@ -260,44 +260,44 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ),
               const SizedBox(height: 20),
 
-                // MQTT DESTINATION INPUT (The Safeguard)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.03),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white10),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "TARGET DESTINATION (MQTT HOST)",
-                        style: TextStyle(
-                          color: Colors.white38,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      TextField(
-                        controller: hostController,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                        ),
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          hintText: "e.g. 100.x.x.x or pitwall-laptop",
-                          hintStyle: TextStyle(color: Colors.white10),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ],
-                  ),
+              // MQTT DESTINATION INPUT (The Safeguard)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.03),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.white10),
                 ),
-              ],
-            ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "TARGET DESTINATION (MQTT HOST)",
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    TextField(
+                      controller: hostController,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      ),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: "e.g. 100.x.x.x or pitwall-laptop",
+                        hintStyle: TextStyle(color: Colors.white10),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -318,9 +318,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 // 1. Update the host in state first
                 state.updateMqttHost(hostController.text);
                 // 2. Start the session with the provided name
-                final started = state.startSession(
-                  nameController.text,
-                );
+                final started = state.startSession(nameController.text);
                 if (started) {
                   Navigator.pop(context);
                 } else {
@@ -387,10 +385,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text(
               'ABORT',
-              style: TextStyle(
-                color: Colors.red,
-                fontWeight: FontWeight.w900,
-              ),
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.w900),
             ),
           ),
         ],
@@ -560,9 +555,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           height: topBarHeight,
           margin: const EdgeInsets.only(bottom: 4),
           decoration: BoxDecoration(
-            color: isServerOffline
-                ? p.orange.withValues(alpha: 0.14)
-                : p.bg,
+            color: isServerOffline ? p.orange.withValues(alpha: 0.14) : p.bg,
             border: Border.all(
               color: isServerOffline ? p.orange : p.border,
               width: isServerOffline ? 1.5 : 1,
@@ -814,12 +807,21 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           // actually significant (>= 100 pending batches), so
                           // normal small buffers never jitter the layout; the
                           // fixed width keeps it stable as the count grows.
-                          if (state.unsentBatchCount >= 100) ...[
+                          if (state.spoolHealth.storageError != null ||
+                              state.spoolHealth.exportError != null) ...[
+                            Text(
+                              state.spoolHealth.storageError != null
+                                  ? 'RECORDING ERROR: ${state.spoolHealth.storageError}'
+                                  : 'CSV ERROR: ${state.spoolHealth.exportError}',
+                              style: TextStyle(color: Colors.red, fontSize: 12),
+                            ),
+                          ],
+                          if (state.pendingRecordCount >= 100) ...[
                             const SizedBox(width: 8),
                             SizedBox(
                               width: 46,
                               child: Text(
-                                'Q:${state.unsentBatchCount}',
+                                'Q:${state.pendingRecordCount}',
                                 style: TextStyle(
                                   color: state.spoolCapacityWarning
                                       ? p.red
@@ -837,7 +839,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           if (state.spoolCapacityWarning && !isTight) ...[
                             const SizedBox(width: 6),
                             Text(
-                              'SPOOL ${state.spoolUsageText} DROP-OLDEST',
+                              'SPOOL ${state.spoolUsageText} RECORDING QUOTA',
                               style: TextStyle(
                                 color: p.red,
                                 fontSize: 10,
@@ -889,7 +891,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           ),
                           // Vertical separator — safe zone boundary
                           const SizedBox(width: 10),
-                          Container(width: 1, height: topBarHeight * 0.6, color: p.border),
+                          Container(
+                            width: 1,
+                            height: topBarHeight * 0.6,
+                            color: p.border,
+                          ),
                           const SizedBox(width: 10),
                           // ABORT: deliberate force-stop behind an are-you-sure
                           // dialog, visible only while logging.
@@ -928,11 +934,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                             // shows a hint so a bump cannot end a session.
                             onTap: state.isLogging
                                 ? () => _showInfoSnackbar(
-                                      'Hold STOP to finish the session.',
-                                    )
+                                    'Hold STOP to finish the session.',
+                                  )
                                 : null,
-                            onLongPress: () =>
-                                _handleStartStop(context, state),
+                            onLongPress: () => _handleStartStop(context, state),
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
                               padding: EdgeInsets.symmetric(
@@ -978,7 +983,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                     ),
                                   ),
                                   if (state.isLogging &&
-                                      state.unsentBatchCount > 0) ...[
+                                      state.pendingRecordCount > 0) ...[
                                     const SizedBox(width: 8),
                                     Container(
                                       padding: const EdgeInsets.symmetric(
@@ -994,7 +999,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                         ),
                                       ),
                                       child: Text(
-                                        '${state.unsentBatchCount}',
+                                        '${state.pendingRecordCount}',
                                         style: TextStyle(
                                           color: p.orange,
                                           fontSize: isTight ? 10 : 11,
@@ -1089,5 +1094,3 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 }
-
-

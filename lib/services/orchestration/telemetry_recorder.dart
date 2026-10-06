@@ -1,5 +1,11 @@
 import 'package:telemetry_dashboard/models/telemetry/telemetry_event.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
+import 'package:telemetry_dashboard/models/session/session_models.dart';
+import 'package:telemetry_dashboard/models/telemetry/journal_record.dart';
+import 'package:telemetry_dashboard/services/persistence/telemetry_journal.dart';
 
 class _Observation {
   final double value;
@@ -26,14 +32,160 @@ class _Observation {
 class TelemetryRecorder {
   final DashboardState state;
   final DateTime Function() nowUtc;
+  final TelemetryJournal? journal;
+  final List<TelemetryRecord> _buffer = [];
+  Timer? _commitTimer;
+  Timer? _snapshotTimer;
+  Future<void>? _flushing;
+  bool _started = false;
+  String _metadataKey = '';
+  int _completedLaps = 0;
   final Map<String, _Observation> _latest = {};
   String _sessionId = '';
   int _sequence = 0;
 
-  TelemetryRecorder(this.state, {DateTime Function()? nowUtc})
+  TelemetryRecorder(this.state, {this.journal, DateTime Function()? nowUtc})
     : nowUtc = nowUtc ?? (() => DateTime.now().toUtc());
 
   int get sequence => _sequence;
+
+  Future<void> start() async {
+    if (_started) return;
+    final storage = journal;
+    if (storage != null) {
+      await storage.initialize();
+      final checkpoint = await storage.readCheckpoint();
+      if (checkpoint != null) {
+        // Corruption is surfaced; never silently discard the recovery record.
+        final snapshot = SessionCheckpointSnapshot.fromJson(
+          jsonDecode(checkpoint) as Map<String, dynamic>,
+        );
+        state.restoreFromCheckpoint(snapshot);
+        state.metadataRevision = math.max(
+          snapshot.metadataRevision,
+          await storage.maxRevision(snapshot.sessionId),
+        );
+        restoreSequence(
+          snapshot.sessionId,
+          math.max(
+            snapshot.lastSeqInSession,
+            await storage.maxSequence(snapshot.sessionId),
+          ),
+        );
+        _completedLaps = state.lapsCompleted;
+        storage.spoolHealth.recordRecoveryResume();
+        record(
+          'Recovery_Resumed',
+          1,
+          source: 'app',
+          unit: 'count',
+          diagnostic: true,
+        );
+      }
+    }
+    _started = true;
+    state.addListener(_captureMetadata);
+    _captureMetadata();
+    _commitTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (_buffer.isNotEmpty) unawaited(_flushSafely());
+    });
+    _snapshotTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      sampleFreshValues();
+      unawaited(_flushSafely());
+    });
+    await flush();
+  }
+
+  Future<void> _flushSafely() async {
+    try {
+      await flush();
+    } catch (_) {
+      /* Journal health exposes the failure. */
+    }
+  }
+
+  void _enqueue(TelemetryRecord record) {
+    if (journal == null) return;
+    if (_buffer.length >= 256) {
+      journal!.spoolHealth.updateRecordingErrors(
+        storage: 'Capture buffer full; recording loss',
+        export: journal!.spoolHealth.exportError,
+        rejected: 1,
+      );
+      return;
+    }
+    _buffer.add(record);
+  }
+
+  void _captureMetadata() {
+    if (state.sessionId.isEmpty) return;
+    final key = '${state.sessionId}/${state.metadataRevision}';
+    if (key == _metadataKey) return;
+    final changedSession = _sessionId != state.sessionId;
+    _syncSession();
+    if (changedSession) _completedLaps = 0;
+    _metadataKey = key;
+    for (var lap = _completedLaps + 1; lap <= state.lapsCompleted; lap++) {
+      final crossing = state.lapCrossings
+          .where((r) => r.lapNumber == lap)
+          .firstOrNull;
+      record(
+        'Lap_Completed',
+        lap.toDouble(),
+        source: 'app',
+        unit: 'count',
+        diagnostic: true,
+        lapNumber: lap,
+        observedAtUtc: crossing?.tsWallUtc,
+      );
+    }
+    _completedLaps = state.lapsCompleted;
+    _enqueue(
+      TelemetryRecord.session({
+        'schema_version': 2,
+        'uid': state.sessionId,
+        'session_name': state.sessionName,
+        'started_at_utc': (state.sessionStartedAtUtc ?? nowUtc())
+            .toUtc()
+            .toIso8601String(),
+        'ended_at_utc': state.sessionEndedAtUtc?.toUtc().toIso8601String(),
+        'session_state': state.sessionState.wireValue,
+        'laps_completed': state.lapsCompleted,
+        'metadata_revision': math.max(1, state.metadataRevision),
+      }),
+    );
+  }
+
+  Future<void> flush() =>
+      _flushing ??= _commit().whenComplete(() => _flushing = null);
+
+  Future<void> _commit() async {
+    final storage = journal;
+    if (storage == null) return;
+    final records = List<TelemetryRecord>.of(_buffer);
+    final active =
+        state.sessionState == SessionState.logging ||
+        state.sessionState == SessionState.armed;
+    final checkpoint = active
+        ? jsonEncode(
+            state
+                .buildSessionCheckpointSnapshot(lastSeqInSession: _sequence)
+                .toJson(),
+          )
+        : null;
+    await storage.appendRecords(records, checkpointJson: checkpoint);
+    _buffer.removeRange(0, records.length);
+    unawaited(storage.flushExports().catchError((Object _) {}));
+  }
+
+  Future<void> stop() async {
+    _started = false;
+    _commitTimer?.cancel();
+    _snapshotTimer?.cancel();
+    state.removeListener(_captureMetadata);
+    await _flushing;
+    await flush();
+  }
 
   void restoreSequence(String sessionId, int sequence) {
     _sessionId = sessionId;
@@ -83,7 +235,8 @@ class TelemetryRecorder {
           previous.value == value &&
           previous.source == source &&
           previous.quality == quality &&
-          sourceSampleId == null) {
+          previous.unit == unit &&
+          previous.sampleId == sourceSampleId) {
         return null;
       }
     }
@@ -117,7 +270,7 @@ class TelemetryRecorder {
     String kind,
     int? lapNumber,
   ) {
-    return DecodedMetricEvent(
+    final event = DecodedMetricEvent(
       metricKey: metric,
       value: observation.value,
       unit: observation.unit,
@@ -136,5 +289,7 @@ class TelemetryRecorder {
       sourceSampleId: observation.sampleId,
       freshnessMs: observation.freshnessMs,
     );
+    _enqueue(TelemetryRecord.metric(event));
+    return event;
   }
 }

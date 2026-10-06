@@ -208,6 +208,9 @@ class SessionCheckpointSnapshot {
   final int lapNumber;
   final int sessionTimeSeconds;
   final int lastSeqInSession;
+  final int? elapsedMs;
+  final int metadataRevision;
+  final DateTime? startedAtUtc;
   final bool gpsLocked;
   final bool usingPhoneGpsFallback;
   final LapDividerMode lapDividerMode;
@@ -228,6 +231,9 @@ class SessionCheckpointSnapshot {
     required this.lapNumber,
     required this.sessionTimeSeconds,
     required this.lastSeqInSession,
+    this.elapsedMs,
+    this.metadataRevision = 1,
+    this.startedAtUtc,
     required this.gpsLocked,
     required this.usingPhoneGpsFallback,
     this.lapDividerMode = LapDividerMode.geofence,
@@ -262,6 +268,9 @@ class SessionCheckpointSnapshot {
       'lap_number': lapNumber,
       'session_time_seconds': sessionTimeSeconds,
       'last_seq_in_session': lastSeqInSession,
+      'elapsed_ms': elapsedMs,
+      'metadata_revision': metadataRevision,
+      'started_at_utc': startedAtUtc?.toUtc().toIso8601String(),
       'gps_locked': gpsLocked,
       'using_phone_gps_fallback': usingPhoneGpsFallback,
       'lap_divider_mode': lapDividerMode.wireValue,
@@ -287,6 +296,9 @@ class SessionCheckpointSnapshot {
       lapNumber: (json['lap_number'] as num?)?.toInt() ?? 1,
       sessionTimeSeconds: (json['session_time_seconds'] as num?)?.toInt() ?? 0,
       lastSeqInSession: (json['last_seq_in_session'] as num?)?.toInt() ?? 0,
+      elapsedMs: (json['elapsed_ms'] as num?)?.toInt(),
+      metadataRevision: (json['metadata_revision'] as num?)?.toInt() ?? 1,
+      startedAtUtc: DateTime.tryParse(json['started_at_utc'] as String? ?? ''),
       gpsLocked: json['gps_locked'] as bool? ?? false,
       usingPhoneGpsFallback: json['using_phone_gps_fallback'] as bool? ?? false,
       lapDividerMode: LapDividerModeWire.fromWire(

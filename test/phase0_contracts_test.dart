@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/models/telemetry/telemetry_event.dart';
-import 'package:telemetry_dashboard/services/transport/mqtt_payload_contract.dart';
 
 void main() {
   group('Phase 0 wire contracts', () {
@@ -80,44 +79,5 @@ void main() {
       expect(decoded.qualityFlag, equals(event.qualityFlag));
     });
 
-    test('telemetry event batch payload round-trip', () {
-      final event = DecodedMetricEvent(
-        metricKey: 'Voltage_780',
-        value: 72.4,
-        unit: 'V',
-        sessionId: 'f6a1c4ac-6458-4ecf-9f1a-feb3f3068d75',
-        lapNumber: 1,
-        sessionState: SessionState.logging,
-        lapPhase: LapPhase.running,
-        tsWallUtc: DateTime.utc(2026, 4, 16, 8, 20, 0),
-        tsSessionMs: 12000,
-        source: 'can',
-        canId: 0x310,
-        seqInSession: 5,
-      );
-
-      final payload = TelemetryEventBatchPayload(
-        schemaVersion: telemetryEventSchemaVersion,
-        batchId: 'e22859d0-6b8c-4eb5-bf35-4df60f58f47b',
-        sessionId: event.sessionId,
-        sessionState: SessionState.logging,
-        createdAtUtc: DateTime.utc(2026, 4, 16, 8, 20, 1),
-        lapsCompleted: 1,
-        events: [event],
-      );
-
-      final encoded = payload.toJson();
-      final decoded = TelemetryEventBatchPayload.fromJson(encoded);
-
-      expect(decoded.schemaVersion, equals(payload.schemaVersion));
-      expect(decoded.batchId, equals(payload.batchId));
-      expect(decoded.sessionId, equals(payload.sessionId));
-      expect(decoded.sessionState, equals(payload.sessionState));
-      expect(decoded.createdAtUtc, equals(payload.createdAtUtc));
-      expect(decoded.lapsCompleted, equals(payload.lapsCompleted));
-      expect(decoded.events.length, equals(1));
-      expect(decoded.events.first.metricKey, equals(event.metricKey));
-      expect(decoded.events.first.seqInSession, equals(event.seqInSession));
-    });
   });
 }

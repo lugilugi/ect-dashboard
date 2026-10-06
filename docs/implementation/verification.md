@@ -32,3 +32,21 @@ Broader container and phone-path checks remain pending subsequent stages.
 The new recorder/journal are integrated into the runtime in the sender stage.
 Hardware qualification is pending by user instruction: no Android/CAN hardware
 is available. Do not publish or declare a hardware-qualified release.
+
+## Stage 05 — runtime and journal sender
+
+CAN/USB and phone GPS now record through TelemetryRecorder, preserving original
+observation time and paired fix identity. Recorder owns metadata revisions,
+checkpoint recovery, bounded capture, fresh snapshots and journal writes.
+MqttService only batches committed records and advances delivery on broker PUBACK.
+There is no direct publish path, second replay queue, or implicit RAM fallback.
+Ending a recovered session offline is allowed; final metadata and checkpoint
+clearing share one transaction. Old batch DTO, spool and checkpoint modules and
+their fake-storage tests were replaced by real SQLite journal/pipeline tests.
+Capacity is bytes; storage/CSV errors are visible in the driver status.
+
+Checks: flutter pub get, flutter analyze --no-pub (no issues), full flutter
+test --no-pub: 87 passed. New tests verify restart sequence recovery, offline
+completion, exact-context retry and ACK ownership. Command/deadman and existing
+UI/GPS regressions pass. Fewer tests reflect removal of the retired fake spool
+implementation; this is not a comparison of physical-device coverage.

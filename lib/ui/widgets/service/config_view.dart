@@ -2478,7 +2478,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
         : '$csvDirectory/session_$normalizedSessionId.csv';
     final queueColor = state.spoolCapacityWarning
         ? p.red
-        : (state.unsentBatchCount > 0 ? p.orange : p.lightGreen);
+        : (state.pendingRecordCount > 0 ? p.orange : p.lightGreen);
     final stateColor = state.sessionState == SessionState.logging
         ? p.lightGreen
         : state.sessionState == SessionState.armed
@@ -2513,7 +2513,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                     ),
                     _buildStorageBadge(
                       label: 'QUEUE',
-                      value: '${state.unsentBatchCount}',
+                      value: '${state.pendingRecordCount}',
                       color: queueColor,
                     ),
                   ],

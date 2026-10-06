@@ -177,6 +177,10 @@ class SessionControlStore {
   int crossingDeadzoneMs = 3000;
   int crossingDeadzoneRemainingMs = 0;
   bool crossingValid = false;
+  void restoreElapsedMs(int elapsed) {
+    elapsedMs = elapsed;
+  }
+
   int get sessionTimeSeconds => elapsedMs ~/ 1000;
   set sessionTimeSeconds(int value) => elapsedMs = value * 1000;
 

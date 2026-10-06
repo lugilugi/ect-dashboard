@@ -4,7 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:telemetry_dashboard/models/telemetry/journal_record.dart';
-import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
+import 'package:telemetry_dashboard/services/persistence/spool_health_store.dart';
 import 'package:telemetry_dashboard/services/persistence/readable_local_copy_writer.dart';
 
 /// Immutable durable records. There is no automatic RAM fallback.
@@ -285,6 +285,22 @@ class TelemetryJournal {
     });
   }
 
+  Future<void> markDropped(int id, String reason) async {
+    await initialize();
+    await _db!.update(
+      'journal',
+      {'delivery_state': 'dropped', 'last_error': reason},
+      where: "id=? AND delivery_state='pending'",
+      whereArgs: [id],
+    );
+    spoolHealth.updateRecordingErrors(
+      storage: reason,
+      export: spoolHealth.exportError,
+      rejected: 1,
+    );
+    await refreshHealth();
+  }
+
   Future<int> maxSequence(String sessionId) =>
       _watermark(sessionId, 'sequence');
   Future<int> maxRevision(String sessionId) =>
@@ -320,8 +336,8 @@ class TelemetryJournal {
           : DateTime.parse(row['oldest'] as String),
     );
     spoolHealth.updatePendingCapacity(
-      pendingBatchCount: row['bytes'] as int,
-      pendingBatchCapacity: maxPendingBytes,
+      pendingBytes: row['bytes'] as int,
+      byteCapacity: maxPendingBytes,
     );
   }
 
