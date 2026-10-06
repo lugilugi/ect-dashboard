@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.0-rc.2 — 7 October 2026
+
+- Fixed Android journal initialization: the WAL pragma returns a row and must use
+  SQLite's query API. Recording can initialize without the top-bar database error.
+- Added a mobile sqflite API regression backed by real SQLite, covering startup
+  and preservation of pending records across reopening. No new schema reset.
+
 ## 3.0.0-rc.1 — 6 October 2026
 
 - Implemented a clean-reset version-2 telemetry pipeline. Phone/server must ship

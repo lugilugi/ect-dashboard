@@ -209,3 +209,24 @@ of Latest. Remote CI, APK and publication outcomes are recorded in the release
 status artifact; earlier no-push/no-release statements describe the initial local
 verification checkpoint. No production deployment/reset is authorized by this
 publication request.
+
+## Android WAL startup regression — 7 October 2026
+
+The rc.1 user reported a native DatabaseException at PRAGMA journal_mode=WAL:
+queries must use query/rawQuery methods. This pragma returns a result row, but
+the journal's onConfigure callback used execute, which Android routes through
+SQLiteDatabase.execSQL. Desktop FFI allowed that call, masking the API mismatch
+in the earlier host qualification.
+
+Added a regression through the real mobile sqflite client and real SQLite
+storage, enforcing Android's non-query execution restriction at the OS boundary.
+Before the fix it reproduces the exact query/rawQuery exception at the WAL
+statement. Changing only that call to rawQuery makes initialization, append/read
+and reopen preserve the queued record without a storage error. This test models
+the platform restriction; it is not a physical Android/CAN qualification run.
+
+Checks: 13 targeted journal/pipeline tests passed; pub get succeeded; full
+analysis reported no issues; the full Flutter suite passed 92 tests with the
+server-only integration test skipped outside the disposable helper. This fix
+changes neither schema version nor wire contract. rc.2 is the signed APK update
+for the startup error, with physical-device confirmation still needed.

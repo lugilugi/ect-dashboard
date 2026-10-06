@@ -62,7 +62,8 @@ class TelemetryJournal {
         options: OpenDatabaseOptions(
           version: 4,
           onConfigure: (db) async {
-            await db.execute('PRAGMA journal_mode=WAL');
+            // This pragma returns a row; Android execSQL rejects query results.
+            await db.rawQuery('PRAGMA journal_mode=WAL');
             await db.execute('PRAGMA synchronous=FULL');
           },
           onCreate: (db, version) => _create(db),
