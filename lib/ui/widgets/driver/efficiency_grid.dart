@@ -97,9 +97,9 @@ class EfficiencyGrid extends StatelessWidget {
                       Expanded(
                         child: _buildSplitCell(
                           "M.C. TEMP / BATT TEMP",
-                          state.mcTempC.toStringAsFixed(0),
+                          state.mcTempC.isFinite ? state.mcTempC.toStringAsFixed(0) : '--',
                           "°C",
-                          state.battTempC.toStringAsFixed(0),
+                          state.battTempC.isFinite ? state.battTempC.toStringAsFixed(0) : '--',
                           "°C",
                           bottomBorder: false,
                           rightBorder: true,

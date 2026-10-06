@@ -33,10 +33,11 @@ ORDER BY j.job_id;
 SELECT schemaname, viewname
 FROM pg_views
 WHERE schemaname = 'public'
-  AND viewname = 'sessions_ingest_view'
+  AND viewname IN ('sessions_ingest_view','telemetry_ingest_view')
 ORDER BY viewname;
 
 \echo '=== Sanity counts ==='
 SELECT COUNT(*) AS session_rows FROM sessions;
-SELECT COUNT(*) AS lap_rows FROM laps;
+SELECT COUNT(*) AS completed_laps FROM lap_bounds;
+SELECT version,contract,schema_sha256 FROM schema_metadata;
 SELECT COUNT(*) AS raw_rows FROM telemetry_raw;

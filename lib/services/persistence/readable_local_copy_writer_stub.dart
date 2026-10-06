@@ -17,6 +17,7 @@ class ReadableLocalCopyPreview {
 }
 
 class ReadableLocalCopyWriter {
+  Future<String?> appendRecord(Map<String, Object?> record) async => null;
   int maxFileBytes;
 
   ReadableLocalCopyWriter({this.maxFileBytes = 4 * 1024 * 1024});
@@ -35,13 +36,6 @@ class ReadableLocalCopyWriter {
     required String? baseDirectoryPath,
     required String? overrideDirectoryPath,
   }) async {}
-
-  Future<String?> appendSessionCsvRow({
-    required String sessionId,
-    required Map<String, Object?> row,
-  }) async {
-    return null;
-  }
 
   Future<void> flush() async {}
 

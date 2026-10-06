@@ -1,625 +1,184 @@
-# ECT Dashboard: Backend Setup, Configuration & CAN Signal Guide
+# ECT backend operations
 
-How to run your own ECT telemetry backend, point the Flutter app at it, and
-add or remove CAN messages/signals without touching the database.
+## Flow and deployment
 
----
+The phone decodes CAN/GPS and owns sessions/laps, commands and live display.
+TelemetryRecorder assigns immutable context; TelemetryJournal commits it and
+the checkpoint; MqttService sends committed pending records. The backend is
+Mosquitto -> Telegraf -> validated SQL -> TimescaleDB read models -> Grafana.
+Server CSV subscribes independently; local CSV exports committed journal rows.
+See [the authoritative v2 contract](docs/contracts/telemetry-v2.md).
 
-## 1. System Architecture
+Both layouts use TimescaleDB 2.17.2/PG16, Telegraf 1.31.3, Grafana 11.1.4 and
+Paho 2.1.0. The single image reuses official component binaries and adds
+Supervisor/tini. Main component tags are pinned; OS/broker package rebuilds can
+still change. Both layouts share one broker config and one Telegraf config.
 
-The ECT Dashboard backend collects sparse JSON telemetry published by the
-Flutter app over MQTT and stores it in a time-series database for dashboards:
-
-```
-[Flutter App (USB/CAN)] --MQTT sparse JSON--> [Mosquitto (broker)]
-                                                        |
-                          +-----------------------------+-----------------------------+
-                          |                                                           |
-              (Telegraf subscribes)                                  (csv-streamer subscribes)
-                          v                                                           v
-        [TimescaleDB (PostgreSQL)] <-- (Telegraf inserts)          [Per-session CSV files]
-                          |                                                           |
-              (Grafana queries)                                      (csv-server serves :8080)
-                          v
-              [Dashboards]
-```
-
-| Component      | Port  | Role                                                        |
-| -------------- | ----- | ----------------------------------------------------------- |
-| **Mosquitto**  | 1883  | MQTT broker; the app publishes sparse JSON batches here.    |
-| **Telegraf**   | –     | Subscribes to MQTT, parses JSON, unpivots to EAV rows, inserts into TimescaleDB. |
-| **TimescaleDB**| 5432  | Time-series PostgreSQL; one row per signal sample.          |
-| **Grafana**    | 3000  | Dashboards and lap analysis.                                |
-| **csv-streamer / csv-server** | 8080 | csv-streamer appends every MQTT batch to per-session CSVs (1s fsync); csv-server serves those files read-only over HTTP. |
-
-The database schema is **shape-agnostic** (narrow EAV rows: `signal_name` /
-`value`), so new CAN signals flow into the backend **with zero schema
-changes** — see [Section 6](#6-adding--removing-can-messages--signals--topics).
-
----
-
-## 2. Deployment Options
-
-There are two equivalent ways to run the backend. Pick whichever fits:
-
-- **Option A — Single container** ([ops/backend](ops/backend)): the whole
-  stack in one image driven by supervisord. `docker build` + `docker run`,
-  no Compose. Easiest for other people to stand up. The image runs under
-  **tini (PID 1)** for clean signal handling, pins **Telegraf 1.31.x** and
-  **Grafana 13.1.1** for reproducible builds, and healthchecks the database,
-  broker, and both CSV services.
-- **Option B — Compose stack** ([ops/local-stack](ops/local-stack)): one
-  container per service, easier to scale/replace individually.
-
-Both use the same schema, the same provisioning files, and the same
-environment-variable configuration.
-
-### Option A: Single container (recommended for most setups)
-
-Requires Docker (with BuildKit, standard since Docker 23+). Build from the
-repository **root** (the whole repo is the build context):
-
-```bash
-cd ect-dashboard
+~~~sh
 docker build -t ect-backend -f ops/backend/Dockerfile .
-```
-
-Run it — override anything with `-e`:
-
-```bash
-docker run -d --name ect-backend \
-  -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 \
-  --restart unless-stopped \
-  -e POSTGRES_PASSWORD=your_db_password \
-  -e GRAFANA_ADMIN_PASSWORD=your_grafana_password \
-  ect-backend
-```
-
-That's it. On first boot the container initializes the database and applies
-[db/schema.sql](db/schema.sql) automatically. Check readiness:
-
-> The container entrypoint (`ect-entrypoint.sh`) maps the documented
-> `GRAFANA_ADMIN_USER/PASSWORD` and `POSTGRES_*` overrides onto Grafana's
-> `GF_SECURITY_*` and Telegraf's `TS_*` variables at start, so `docker run
-> -e` works as documented. Explicit `GF_*` / `TS_*` overrides always win.
-
-```bash
-docker logs -f ect-backend          # watch supervisord start all 6 services
-docker exec ect-backend supervisorctl status
-```
-
-| Service   | How to reach it from outside                       |
-| --------- | -------------------------------------------------- |
-| MQTT      | `mqtt://<host>:1883`                                |
-| TimescaleDB | `postgresql://postgres:<password>@<host>:5432/telemetry` |
-| Grafana   | `http://<host>:3000` — log in with `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` |
-| CSV files | `http://<host>:8080/` — continuous streamer CSVs + snapshot exports |
-
-The app's MQTT settings (host/port, topics) are configured in **Service
-mode → Config → MQTT**.
-
-### Option B: Compose stack
-
-```bash
-cd ops/local-stack
-cp .env.example .env        # optional: adjust credentials/ports
-docker compose up --build -d
-```
-
-Stop and wipe everything (fresh database):
-
-```bash
-docker compose down -v
-```
-
----
-
-## 3. Configuration Reference (Environment Variables)
-
-Both deployment options read the same variables. The single-container image
-ships safe local defaults (set via `ENV` in the Dockerfile); Compose passes
-them through [`.env`](ops/local-stack/.env.example). Override with
-`docker run -e VAR=value` or in `.env`.
-
-| Variable                | Default                          | Meaning                                   |
-| ----------------------- | -------------------------------- | ----------------------------------------- |
-| `POSTGRES_DB`           | `telemetry`                      | Database name (also used by Telegraf/Grafana). |
-| `POSTGRES_USER`         | `postgres`                       | Database user.                            |
-| `POSTGRES_PASSWORD`     | `postgres`                       | **Change in production.**                 |
-| `GRAFANA_ADMIN_USER`    | `admin`                          | Grafana admin login.                      |
-| `GRAFANA_ADMIN_PASSWORD`| `admin`                          | Grafana admin password. **Change in production.** |
-| `TOPIC_EVENTS`          | `telemetry/eco_archers/events`   | MQTT topic the app publishes telemetry batches to. |
-| `TOPIC_SESSIONS`        | `telemetry/eco_archers/sessions` | MQTT topic for session metadata.          |
-| `MQTT_HOST` / `MQTT_PORT` | `127.0.0.1` / `1883`           | Broker address Telegraf subscribes to (Compose: `mosquitto`). |
-| `TS_HOST` / `TS_PORT`   | `127.0.0.1` / `5432`             | Database address Telegraf writes to (Compose: `timescaledb`). |
-| `TS_DB` / `TS_USER` / `TS_PASSWORD` | `telemetry` / `postgres` / `postgres` | Telegraf database credentials. |
-| `TS_DATASOURCE_URL`     | `localhost:5432` (single) / `timescaledb:5432` (Compose) | Grafana datasource URL. |
-| `TS_DATASOURCE_USER/DB/PASSWORD` | `postgres` / `telemetry` / `postgres` | Grafana datasource credentials. |
-| `EXPORT_DIR`            | `/var/lib/ect-backend/exports` (single) / `/exports` (Compose) | Where csv-streamer and snapshot exports write CSV files. |
-| `CSV_SERVER_PORT`       | `8080`                          | Read-only HTTP download port for the CSV files. |
-| `GF_PATHS_DATA`         | `/var/lib/grafana`              | Grafana data/DB directory (persistent volume in the single container). |
-| `TS_PORT` / `MQTT_PORT` / `GRAFANA_PORT` (Compose) | `5432` / `1883` / `3000` | **Host** port bindings. |
-
-**App side:** set the same broker host/port in the app (Service → Config →
-MQTT). The app publishes to `TOPIC_EVENTS` and `TOPIC_SESSIONS` — if you
-override the topics, update the app or point a broker-level topic rewrite at
-the defaults.
-
----
-
-## 4. MQTT Contract
-
-### Topics
-
-| Topic                            | Publisher | Payload                                        |
-| -------------------------------- | --------- | ---------------------------------------------- |
-| `telemetry/eco_archers/events`   | App       | Sparse JSON batch of changed signal values     |
-| `telemetry/eco_archers/sessions` | App       | Session metadata (upserted into `sessions`)    |
-
-Topics are configurable (`TOPIC_EVENTS` / `TOPIC_SESSIONS`) so teams can
-namespace their own deployment (e.g. `telemetry/my_team/events`).
-
-### Events payload (sparse batch)
-
-The app publishes one sparse JSON object per batch. Batches are flushed as
-soon as 8 events are buffered or 50 ms have elapsed (whichever comes first,
-capped at 32 events / 32 KB). In addition, once per second the app sends a
-full-state heartbeat with every currently-known signal value — changed or
-not — so steady-state values stay live in Grafana and CSV logs keep a fixed
-1 Hz cadence:
-
-```json
-{
-  "session_uid": "1a2b…",
-  "lap_number": 3,
-  "ts_wall_utc": "2026-08-01T04:00:00.000Z",
-  "ts_session_ms": 654321,
-  "seq_in_session_start": 123,
-  "seq_in_session_end": 156,
-  "Speed_Kmh": 42.5,
-  "Voltage_780": 41.2
-}
-```
-
-- `session_uid`, `lap_number`, `ts_session_ms`, `seq_in_session_start/end`
-  become tags (segment keys).
-- `ts_wall_utc` becomes the metric timestamp (so outage replays keep original
-  timing).
-- Every other key is a **signal** → one EAV row: `signal_name` = key,
-  `value` = number.
-
-### Sessions payload
-
-```json
-{ "uid": "…", "session_name": "Day 1 - Run 2", "vehicle_setup": "{…}" }
-```
-
-Telegraf inserts through the `sessions_ingest_view` writable view, which
-upserts on `uid` — safe to publish repeatedly. Only `uid` and
-`session_name` are ingested; `vehicle_setup` (a nested object) is not
-supported by the `json_v2` parser and is skipped (see [Section 7](#7-database-schema-overview)).
-
----
-
-## 5. CAN Protocol and App Bindings
-
-**The wire-protocol source of truth is
-[`dbc/network.dbc`](dbc/network.dbc), version `ECT2026_CAN_V5`.** The committed
-Dart catalog at
-[`lib/models/telemetry/generated/can_database.g.dart`](lib/models/telemetry/generated/can_database.g.dart)
-is produced by [`tools/generate_can_dart.py`](tools/generate_can_dart.py).
-The app-owned MQTT/state mapping lives in
-[`lib/models/telemetry/can_bindings.dart`](lib/models/telemetry/can_bindings.dart).
-The backend remains a pure EAV sink — it stores *any* `signal_name` the app
-publishes — so no database migration is required when adding a DBC signal.
-
-Regenerate after changing the DBC:
-
-```bash
-python -m pip install -r tools/requirements.txt
-python tools/generate_can_dart.py
-dart format lib/models/telemetry/generated/can_database.g.dart
-```
-
-The generated Dart file is committed so normal Flutter builds do not require
-Python. CI regenerates it and fails if the checked-in artifact is stale.
-ECT2026 firmware can generate its C pack/unpack implementation from the same
-DBC:
-
-```bash
-python -m cantools generate_c_source --database-name network dbc/network.dbc
-```
-
-| CAN ID | Message           | Signal                 | Unit  |
-| ------ | ----------------- | ---------------------- | ----- |
-| `0x110`| PEDAL_STATUS       | `Throttle_Percent`       | %        |
-| `0x110`| PEDAL_STATUS       | `Brake_Active`           | bool     |
-| `0x310`| PACK_POWER         | `Voltage_780`            | V        |
-| `0x310`| PACK_POWER         | `Current_780`            | A        |
-| `0x311`| AUX_POWER          | `Voltage_740`            | V        |
-| `0x311`| AUX_POWER          | `Current_740`            | A        |
-| `0x312`| PACK_ENERGY        | `Joules_780`             | J        |
-| `0x400`| VEHICLE_MOTION     | `Speed_Kmh`              | km/h     |
-| `0x400`| VEHICLE_MOTION     | `Distance_Km`            | km       |
-| `0x410`| GPS_STATUS         | `GPS_Satellites`         | count    |
-| `0x410`| GPS_STATUS         | `GPS_Locked`             | bool     |
-| `0x410`| GPS_STATUS         | `GPS_Fallback_Active`    | bool     |
-| `0x410`| GPS_STATUS         | `GPS_Fallback_Period_Ms` | ms       |
-| `0x411`| GPS_POSITION       | `GPS_Latitude_Deg`       | deg      |
-| `0x411`| GPS_POSITION       | `GPS_Longitude_Deg`      | deg      |
-| `0x412`| GPS_MOTION         | `GPS_Speed_Kmh`           | km/h     |
-| `0x412`| GPS_MOTION         | `GPS_Heading_Deg`         | deg      |
-| `0x600`| MOTOR_STATE        | `Motor_Speed_Rpm`         | rpm      |
-| `0x600`| MOTOR_STATE        | `Motor_Sequencer_State`   | state    |
-| `0x600`| MOTOR_STATE        | `Motor_Status`             | bitfield |
-| `0x601`| MOTOR_CURRENT      | `Motor_Iq_A`              | A        |
-| `0x601`| MOTOR_CURRENT      | `Motor_Id_A`              | A        |
-| `0x601`| MOTOR_CURRENT      | `Motor_Current_A`          | A        |
-| `0x602`| MOTOR_VOLTAGE      | `DC_Bus_Voltage_V`        | V        |
-| `0x602`| MOTOR_VOLTAGE      | `Motor_Vq_V`               | V        |
-| `0x602`| MOTOR_VOLTAGE      | `Motor_Vd_V`               | V        |
-| `0x603`| MOTOR_FAULTS       | `MC_Fault_Flags`          | bitfield |
-| `0x603`| MOTOR_FAULTS       | `MC_Software_Faults`      | bitfield |
-
-Signal names use `CamelCase` with units as suffixes (`_C`, `_Kmh`, `_Deg`).
-Phone-GPS fallback reuses the same `GPS_*` names with a `phone_gps` source,
-so external and fallback GPS plot on the same series. The generated catalog
-owns CAN IDs and signal scaling; application behavior and MQTT names are
-intentionally kept in the separate `CanBindings` adapter.
-
-The V5 DBC does not define motor/battery temperature or driving-strategy
-signals. The existing temperature and strategy UI fields therefore remain
-legacy placeholders until the vehicle team assigns them to a real V5 signal;
-they must not be treated as measurements from this DBC. Motor fault flags are
-projected into the existing in-app fault indicator and are published as the
-`MC_Fault_Flags` and `MC_Software_Faults` bitfields.
-
----
-
-## 6. Adding / Removing CAN Messages, Signals & Topics
-
-### Adding a new signal to an existing CAN message (easiest — no ID change)
-
-1. **Protocol:** add the signal to `dbc/network.dbc`.
-2. **App:** run `python tools/generate_can_dart.py` and commit the generated
-   Dart file.
-3. **App:** add a `CanTelemetryBinding` and include the signal in the relevant
-   `CanBindings` handler in `lib/models/telemetry/can_bindings.dart`.
-4. Done — the backend ingests it automatically (EAV schema). Add or update a
-   Grafana panel only if the signal should be visualized.
-
-### Adding a brand-new CAN message (new ID)
-
-1. **Protocol:** add the message and signals to `dbc/network.dbc`.
-2. **App:** run `python tools/generate_can_dart.py` and commit the generated
-   catalog.
-3. **App:** add bindings and state behavior in `CanBindings` if the message is
-   operational telemetry; diagnostic-only messages may remain decode-only.
-4. **Backend:** nothing to change. Optionally add a Grafana panel querying the
-   new `signal_name`.
-
-### Removing a signal or message
-
-1. Remove the signal or message from `dbc/network.dbc`.
-2. Regenerate and commit the generated catalog.
-3. Remove its `CanTelemetryBinding` and handler behavior if it is no longer
-   published.
-4. Historical rows stay in the database (they are just data), new batches
-   simply stop carrying the field.
-
-### Adding a new MQTT topic (beyond events/sessions)
-
-1. **Backend:** add an `[[inputs.mqtt_consumer]]` block to the Telegraf
-   config (`ops/backend/telegraf.conf` or
-   `ops/local-stack/telegraf/telegraf.conf`) pointing at a new env var, e.g.
-   `topics = ["${TOPIC_COMMANDS}"]`.
-2. **Backend:** export the variable — `-e TOPIC_COMMANDS=…` for the
-   single container, or an `environment:` entry / `.env` line for Compose.
-3. **App:** publish to that topic from wherever you like
-   (`MqttService` exposes `publish(topic:payloadJson:)` on the transport).
-
-> Rule of thumb: **signals never need schema changes.** Only a brand-new
-> *message family* (e.g. `commands`) would justify a new Telegraf input.
-
----
-
-## 7. Database Schema Overview
-
-All database definitions are consolidated in [db/schema.sql](db/schema.sql).
-
-The schema follows a narrow Entity-Attribute-Value (EAV) design. Every CAN
-message becomes a single row per signal, so the pipeline stays
-shape-agnostic: irregular or differently-shaped CAN messages never require
-schema changes.
-
-### Core Tables
-
-1. **`sessions`**: Metadata for active runs (UUID `uid`, `session_name`,
-   `created_at`, `updated_at`, `vehicle_setup` JSONB).
-2. **`laps`**: Lap sequence numbers and boundaries (`lap_number`,
-   `started_at`, `ended_at`). Linked to `sessions(uid)` via FK.
-3. **`telemetry_raw`** (Hypertable): The narrow time-series sink — one row
-   per signal sample:
-   - `time` (TIMESTAMPTZ) — the wall-clock capture time from the app payload.
-   - `session_uid`, `lap_number`, `ts_session_ms`, `seq_in_session_start`,
-     `seq_in_session_end` (**TEXT**) — segment keys.
-   - `signal_name` (TEXT), `value` (DOUBLE PRECISION) — the EAV pair
-     (e.g. `'Speed_Kmh'`, `'Voltage_780'`).
-
-> **Why the segment keys are TEXT:** Telegraf's `outputs.postgresql` plugin
-> (≥1.31) writes metrics via `COPY … FROM STDIN BINARY`, encoding every
-> **tag** as a string against the column's declared type. Pre-created tables
-> whose tag columns are `uuid`/`int`/`bigint` fail with
-> `08P01: insufficient data left in message` (or `22P03: incorrect binary
-> data format`). Tags must therefore be TEXT columns here; cast in queries
-> when you need numeric semantics, e.g. `lap_number::int`,
-> `ts_session_ms::bigint` (see [Section 10](#10-grafana-custom-queries--performance)).
->
-> **Performance impact: none in practice.** The hot columns are untouched:
-> `time` (TIMESTAMPTZ) drives hypertable chunk pruning, `value`
-> (DOUBLE PRECISION) does all aggregation, and `signal_name` was always
-> TEXT. Dashboard filters like `session_uid::text = '…'` are equality on a
-> TEXT column — the `::text` cast is a no-op that the planner strips, so the
-> `idx_telemetry_lookup` index is still used (verified with `EXPLAIN`). The
-> only casts needed are for ordering/arithmetic (`lap_number::int`,
-> `ts_session_ms::bigint`), which run on already-filtered result sets.
-
-**Indexes & lifecycle:** `telemetry_raw` ships with
-`idx_telemetry_lookup (session_uid, signal_name, time DESC)` (live overview)
-and `idx_telemetry_lap_lookup (session_uid, lap_number, signal_name, time
-DESC)` (lap analysis). Chunks are compressed after 2 hours. There are **no
-retention policies** — all telemetry is kept indefinitely, so size the disk
-for full race history.
-
-### Writable View
-
-**`sessions_ingest_view`** exposes `uid` (TEXT — the plugin writes it as a
-string), `session_name`, `vehicle_setup`, `time`. An `INSTEAD OF INSERT`
-trigger casts `uid` back to `UUID` and upserts into `sessions` on `uid`, so
-Telegraf can publish session metadata idempotently. The upsert preserves any
-existing `vehicle_setup` (never overwritten with NULL) and bumps
-`updated_at`.
-
-> `vehicle_setup` (JSONB) is deliberately **not** ingested through this
-> pipeline: Telegraf `json_v2` cannot stringify a nested JSON object into a
-> single field (it would flatten it into `vehicle_setup_*` fields and
-> clobber the whole metric batch), so the column stays in the base table for
-> manual/API use. The ingest contract is `uid` + `session_name` only.
-
-### Ingestion Pipeline (sparse payload → EAV)
-
-1. The app batches changed metric values and publishes a sparse JSON object
-   per batch (see [Section 4](#4-mqtt-contract)).
-2. Telegraf `json_v2` parses it, tags the metadata (`session_uid`,
-   `lap_number`, `ts_session_ms`, `seq_in_session_start`,
-   `seq_in_session_end`), uses `ts_wall_utc` as the metric timestamp, and
-   emits the remaining fields as fields.
-3. The `[[processors.unpivot]]` processor turns each field into an EAV row
-   (`signal_name` = key, `value` = numeric value) under the `telemetry_raw`
-   measurement.
-4. Replayed/backfilled batches keep their original `ts_wall_utc` timestamps,
-   so order and timing survive outage recovery.
-
----
-
-## 8. Verifying the Pipeline
-
-Everything healthy? From inside the container:
-
-```bash
-docker exec ect-backend supervisorctl status
-# postgres RUNNING ... mosquitto RUNNING ... telegraf RUNNING ...
-# csv-server RUNNING ... csv-streamer RUNNING ... grafana RUNNING
-```
-
-Watch live rows as the app logs:
-
-```sql
-docker exec -it ect-backend psql -U postgres -d telemetry
-SELECT count(*) FROM telemetry_raw;
-SELECT signal_name, count(*) FROM telemetry_raw GROUP BY signal_name ORDER BY 2 DESC;
-```
-
-Or run the bundled verification script against any TimescaleDB:
-
-```bash
-psql "$TS_DSN" -f db/scripts/verify_setup.sql
-```
-
-A quick end-to-end smoke test with a raw MQTT publish (requires
-`mosquitto_pub` — install `mosquitto-clients` on the host if missing; the
-single-container image includes it):
-
-```bash
-mosquitto_pub -h localhost -t telemetry/eco_archers/events -m \
-  '{"session_uid":"00000000-0000-0000-0000-000000000001","lap_number":1,
-    "ts_wall_utc":"2026-08-01T00:00:00.000Z","ts_session_ms":0,
-    "seq_in_session_start":1,"seq_in_session_end":1,
-    "Speed_Kmh":25.0,"Voltage_780":40.0}'
-# then: SELECT * FROM telemetry_raw ORDER BY time DESC LIMIT 2;
-```
-
----
-
-## 9. Exporting Logs to CSV
-
-### Host-side (dev machine)
-
-We provide scripts to connect to the database and export all tables to CSV
-files in a local folder (`./csv_exports/`). These scripts run the export
-*inside the running Docker container*, meaning you do **not** need local
-database utilities (like `psql`) installed on your host.
-
-- **On Windows (PowerShell)**:
-  ```powershell
-  .\db\scripts\export_to_csv.ps1
-  ```
-- **On Linux/macOS (Bash)**:
-  ```bash
-  ./db/scripts/export_to_csv.sh
-  ```
-
-### Continuous streamer (automatic, both deployments)
-
-The backend also logs **continuously**: the `csv-streamer` service subscribes
-to `TOPIC_EVENTS` / `TOPIC_SESSIONS` and appends every signal to
-`events_<session_uid>.csv` (plus a `sessions.csv`) in `EXPORT_DIR`. Rows are
-fsynced once per second, so a sudden kill loses at most ~1s of rows, and QoS1
-duplicates are suppressed. Files are never deleted — no retention.
-
-- **Single container**: runs automatically under supervisord; files land in
-  `/var/lib/ect-backend/exports` and are served at `http://<host>:8080/`.
-- **Compose stack**: the `csv-streamer` service writes into the host
-  `./csv_exports/` bind mount.
-
-### Server-side (saved on the backend itself)
-
-The backend also keeps its own exports, written **inside the server**, so
-they survive without a host connection. Each run writes timestamped files
-(`sessions_<stamp>.csv`, `laps_<stamp>.csv`, `telemetry_raw_<stamp>.csv`),
-preserving history across runs. Writes are atomic (temp file + rename), so a
-failed export never leaves a partial file behind.
-
-- **Single container**: run the built-in script, then browse/download the
-  files at `http://<backend-host>:8080/` (read-only HTTP file server on the
-  `csv-server` service, port 8080):
-  ```bash
-  docker exec ect-backend export_to_csv.sh
-  # files in the persistent volume /var/lib/ect-backend/exports
-  # (download via http://localhost:8080/)
-  ```
-- **Compose stack**: run the same script inside the database container; files
-  land in the host `./csv_exports/` folder via a bind mount:
-  ```bash
-  docker exec ect-timescaledb sh /ops/backend/export_to_csv.sh
-  ```
-
-**Custom exports** (any query you like, straight to a file on the server):
-
-```bash
-# single container (output lands in /var/lib/ect-backend/exports/<file>.csv)
-docker exec ect-backend psql -U postgres -d telemetry \
-  -c "\copy (SELECT * FROM telemetry_raw WHERE signal_name = 'Speed_Kmh' AND time > now() - interval '1 day') TO '/var/lib/ect-backend/exports/speed_1d.csv' WITH CSV HEADER"
-
-# compose stack (writes into ./csv_exports/)
-docker exec ect-timescaledb psql -U postgres -d telemetry \
-  -c "\copy (SELECT * FROM sessions) TO '/exports/sessions.csv' WITH CSV HEADER"
-```
-
-The `csv-server` HTTP endpoint is read-only (it serves files that
-`export_to_csv.sh` or `psql \copy` already wrote — it never executes SQL).
-Like the MQTT broker, it has no auth and is meant for trusted networks;
-see [Production hardening](#production-hardening).
-
----
-
-## 10. Grafana Custom Queries & Performance
-
-When writing queries in Grafana, follow these rules to maintain database
-performance and prevent dashboard latency.
-
-### Rule 1: Always Constrain Queries on the Partition Key (`time`)
-
-Because `telemetry_raw` is a hypertable partitioned by time, PostgreSQL must
-scan every historical chunk if you do not filter by time.
-
-**Bad Query (Scans all historical chunks):**
-```sql
-SELECT time_bucket('$__interval', time) AS "time", avg(value)::double precision AS value
-FROM telemetry_raw
-WHERE session_uid::text = '${session_id}'
-  AND signal_name = 'Speed_Kmh'
-GROUP BY 1
-ORDER BY 1;
-```
-
-**Good Query (Restricts scans to chunks since the session started):**
-```sql
-SELECT time_bucket('$__interval', time) AS "time", avg(value)::double precision AS value
-FROM telemetry_raw
-WHERE session_uid::text = '${session_id}'
-  AND signal_name = 'Speed_Kmh'
-  AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')
-GROUP BY 1
-ORDER BY 1;
-```
-
-### Rule 2: Use Dynamic Downsampling (`time_bucket`)
-
-To prevent Grafana from pulling hundreds of thousands of raw data points
-(which freezes the browser and strains the database), use TimescaleDB's
-`time_bucket` along with Grafana's `$__interval` macro to aggregate data
-points dynamically based on your zoom level:
-
-```sql
-SELECT
-  time_bucket('$__interval', time) AS "time",
-  avg(value)::double precision AS value
-FROM telemetry_raw
-WHERE session_uid::text = '${session_id}'
-  AND signal_name = 'Speed_Kmh'
-  AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')
-GROUP BY 1
-ORDER BY 1;
-```
-
-### Rule 3: Normalizing Laps for Overlays
-
-To overlay multiple laps on top of each other (starting at `0` on the
-x-axis), calculate the relative duration offset using window functions and
-cast it back to a timestamp so Grafana can render it on a timeline axis:
-
-```sql
-SELECT
-  to_timestamp((ts_session_ms::bigint - MIN(ts_session_ms::bigint) OVER (PARTITION BY lap_number)) / 1000.0) AS "time",
-  ('Lap ' || lap_number::text) AS metric,
-  value::double precision AS value
-FROM telemetry_raw
-WHERE session_uid::text = '${session_id}'
-  AND signal_name = 'Speed_Kmh'
-  AND lap_number IS NOT NULL
-  AND time >= COALESCE((SELECT created_at FROM sessions WHERE uid::text = '${session_id}'), now() - interval '6 hours')
-ORDER BY lap_number::int, ts_session_ms::bigint;
-```
-
-> Segment keys (`lap_number`, `ts_session_ms`, `seq_*`) are stored as TEXT
-> (see [Section 7](#7-database-schema-overview)), so always cast them for
-> arithmetic or ordering: `lap_number::int`, `ts_session_ms::bigint`.
-
-### Rule 4: Keep Live Refresh Cheap
-
-The provisioned dashboards use a **2s refresh** on the live overview and
-**5s** on the lap-analysis view (which runs heavier window functions).
-Time-series panels set `maxDataPoints: 1000` and `interval: "2s"` so
-`$__interval` never drops below the ingest cadence. The
-`idx_telemetry_lap_lookup` index covers lap-filtered queries, and the
-`grafana_reader` role has `statement_timeout = '30s'` so a runaway query
-cannot stall the host. Keep panel intervals at or above the 1s Telegraf
-flush — anything faster just repeats work.
-
----
-
-## 11. Troubleshooting
-
-| Symptom                                     | Likely cause / fix                                                        |
-| ------------------------------------------- | ------------------------------------------------------------------------- |
-| App shows **Q (pending) growing**           | Broker unreachable. Check `docker logs ect-backend`; verify app MQTT host/port; the app spools and replays automatically when the broker returns. |
-| Telegraf keeps restarting                   | Bad env interpolation — confirm `MQTT_HOST`, `TS_HOST`, `TOPIC_EVENTS` are set (`docker exec ect-backend env`). |
-| No rows in `telemetry_raw`                  | Topics mismatch: broker topic vs `TOPIC_EVENTS` vs app publish topic must all agree. |
-| Telegraf log: `08P01: insufficient data left in message` / `22P03: incorrect binary data format` on `COPY telemetry_raw` | Tag columns were typed `uuid`/`int`/`bigint` in an older schema. Telegraf's `outputs.postgresql` (≥1.31) COPYs in **binary** format and encodes tags as strings — columns must be TEXT. `ALTER TABLE telemetry_raw ALTER COLUMN <col> TYPE text;` (see [Section 7](#7-database-schema-overview)). |
-| Sessions messages don't reach the `sessions` table | `uid` in `sessions_ingest_view` must be TEXT (cast to `uuid` in the trigger). Also ensure `vehicle_setup` is NOT in `included_keys` — a nested object makes `json_v2` emit zero metrics. |
-| Grafana shows datasource error              | `TS_DATASOURCE_URL/PASSWORD` wrong for the deployment type (single: `localhost:5432`, Compose: `timescaledb:5432`). |
-| Grafana loads no dashboards / no datasource | Grafana ≥13 defaults the provisioning path to `/usr/share/grafana/conf/provisioning` — the single container sets `GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect`. Also: provisioning env vars use Go `os.ExpandEnv` semantics — plain `${VAR}` only, the `:-default` syntax expands to an **empty string** (silently broken datasource). |
-| Schema not applied on an existing container | `/docker-entrypoint-initdb.d` runs only on an **empty** data volume — wipe it (`docker compose down -v` or `docker volume rm`). There are no migration files; `db/schema.sql` is the single fresh-install source. |
-| Container never becomes healthy             | The healthcheck (30s interval, 60s start period) runs `pg_isready`, a `timeout 5 mosquitto_pub` broker probe, and checks that `csv-server` + `csv-streamer` are RUNNING under supervisord. If it stays unhealthy, check `docker inspect --format '{{json .State.Health.Log}}' ect-backend` and `docker exec ect-backend supervisorctl status`. |
-| `csv-streamer` is not writing CSVs          | Check `docker exec ect-backend supervisorctl status csv-streamer`; confirm `TOPIC_EVENTS`/`TOPIC_SESSIONS` match the app, and that `EXPORT_DIR` is writable by the `telegraf` user. |
-| App shows `SPOOL … DROP-OLDEST`             | Broker outage exceeded the 50,000-batch spool cap; the oldest batches are dropped by design (the vehicle's local CSV mirror still has them). Bring the broker back to resume replay. |
-| `vehicle_setup` was being wiped on session upserts | Fixed in the renewed schema — the upsert now preserves it. Re-apply `db/schema.sql` on an empty volume. |
-| MQTT refused on non-local host              | Broker binds `0.0.0.0` — check host firewall/security group on port 1883. |
-
-### Production hardening
-
-`ops/backend` and `ops/local-stack` ship with **anonymous, plaintext** broker
-access for local development. Before anything leaves a trusted network, follow
-[ops/mosquitto/README.md](ops/mosquitto/README.md): create users, ACLs, and
-TLS listener, set `allow_anonymous false`, and change every default password.
+docker run -d --name ect-backend --restart unless-stopped -p 1883:1883 -p 3000:3000 -p 8080:8080 -e POSTGRES_PASSWORD=your-db-password -e TELEGRAF_PASSWORD=your-ingest-password -e GRAFANA_READER_PASSWORD=your-reader-password -e GRAFANA_ADMIN_PASSWORD=your-admin-password ect-backend
+~~~
+
+For Compose, copy ops/local-stack/.env.example to .env in that directory, set
+credentials, and run:
+
+~~~sh
+docker compose -f ops/local-stack/docker-compose.yml --env-file ops/local-stack/.env up -d --build
+~~~
+
+Use named mounts for reliable single-container replacement:
+ /var/lib/postgresql/data, /var/lib/mosquitto, /var/lib/grafana and
+ /var/lib/ect-backend/exports. Anonymous volumes survive ordinary restart but
+must be explicitly reattached after replacing a container. Compose mounts
+csv_exports on the host; its CSV entrypoint initializes ownership for uid/gid
+65534, then drops privileges. CSV HTTP uses a read-only mount.
+
+| Surface | Port | Role |
+|---|---:|---|
+| MQTT | 1883 | Phone handoff and persistent consumer subscriptions |
+| PostgreSQL | 5432 | Optional direct access; phone never queries SQL |
+| Grafana | 3000 | Session/lap dashboards and fresh-source alerts |
+| CSV HTTP | 8080 | Read-only archive/snapshot download in both layouts |
+
+Supplied broker/CSV services assume a trusted network. Read
+[broker authentication/TLS guidance](ops/mosquitto/README.md) before exposing
+them outside that network. CSV serving rejects symlink traversal outside its root.
+
+## Environment
+
+| Variables | Behavior |
+|---|---|
+| POSTGRES_DB / USER / PASSWORD | Dedicated DB bootstrap; development defaults telemetry/postgres/postgres |
+| TELEGRAF_PASSWORD | telegraf_ingest password; development default telegraf |
+| GRAFANA_READER_PASSWORD | grafana_reader password; development default grafana |
+| GRAFANA_ADMIN_USER / PASSWORD | Grafana login; development defaults admin/admin |
+| TS_HOST / PORT / DB / USER / PASSWORD | Single ingest overrides; defaults derive at runtime |
+| TS_DATASOURCE_URL / USER / DB / PASSWORD | Single datasource overrides; defaults use reader/custom DB |
+| TOPIC_EVENTS / TOPIC_SESSIONS | Consumer topics; phone currently uses the standard topics |
+| TELEGRAF_EVENTS_CLIENT_ID / TELEGRAF_SESSIONS_CLIENT_ID / CSV_CLIENT_ID | Stable consumer identities; distinct deployments need distinct IDs |
+| CSV_SERVER_PORT / EXPORT_DIR | Single CSV HTTP port/export root |
+| TS_PORT / MQTT_PORT / GRAFANA_PORT / CSV_SERVER_PORT in Compose .env | Host mappings; internal service ports stay fixed |
+
+MQTT_HOST/MQTT_PORT point consumers at their internal broker. Topics are
+telemetry/eco_archers/events and telemetry/eco_archers/sessions. Explicit TS_*
+overrides win for single-container consumers. Its baked-in ingest/datasource
+credentials no longer mask custom bootstrap values. Grafana provisioning uses
+plain environment interpolation; shell-style defaults belong to runtime wiring.
+
+Changing POSTGRES_* on an existing volume does not rename its DB/users or change
+stored passwords. Role setup runs during fresh initialization. Update credentials
+deliberately in both DB roles and consumers.
+
+## Schema and analytics
+
+| Relation | Responsibility |
+|---|---|
+| schema_metadata | Version, source SHA-256 and initialization time |
+| sessions | UUID, captured start/end and monotonic metadata revision |
+| telemetry_raw / telemetry_samples | Typed hypertable and read surface |
+| telemetry_ingest_view / sessions_ingest_view | TEXT-tag COPY adapters with validating triggers |
+| ingest_rejections | Malformed/conflicting records and reasons |
+| session_catalog | Discovery even when metrics precede metadata |
+| latest_signals | Latest original observation and source freshness |
+| accumulator_deltas / session_totals / lap_totals | Reset-safe main-energy/distance totals |
+| lap_bounds | Explicit completion diagnostics/elapsed duration |
+| telemetry_seconds / lap_analytics | Shared estimates and complete/in-progress laps |
+| gps_fixes | Coordinates paired by source/fix identity |
+
+telegraf_ingest can insert/select ingest views and read schema_metadata.
+Security-definer triggers validate/cast into owned tables with a fixed search
+path. grafana_reader reads designated surfaces with a 30-second query timeout.
+Telemetry has no metadata FK: early metrics are intentionally valid.
+
+The first accumulator sample is a baseline. A reset contributes its new
+nonnegative value. Bucket estimates use available data without interpolating
+missing sensors. An observed lap is not automatically completed. Sequence gaps
+are provisional until delayed delivery is reconciled. Unsupported temperature
+and auxiliary-energy panels are removed; live alerts check original source age
+and current fault bitfields. Phone temperatures/cells are unavailable until
+implemented, rather than synthetic numeric placeholders.
+
+Telegraf 1.31.3 array timestamp_key repeats the first element timestamp. The
+adapter carries each original ts_wall_utc as TEXT and casts it in SQL. Owned
+timestamps/UUIDs/integers are typed. There is no unpivot, vehicle_setup JSON,
+optional stored laps table or batch sequence range. New metric names need no
+SQL column. DBC additions use the generator and can_bindings.dart.
+
+## Initialization and existing volumes
+
+Fresh-only schema/role initialization records a schema fingerprint. TCP
+readiness excludes Postgres's temporary initialization socket. Single ingest
+waits for a matching schema; Compose gates readers on DB health. Single health
+also probes broker, CSV HTTP, Grafana and stable worker processes. Qualification
+publishes through both subscriptions; process existence is insufficient.
+
+Old/mismatched schema is unhealthy and preserved. Startup never silently drops
+or upgrades it. Use the [explicit paired clean cutover](docs/implementation/cutover.md)
+for this breaking release. Future upgrades need a versioned upgrade path.
+
+For manual fresh bootstrap, set PGHOST/PORT/DATABASE/USER/PASSWORD plus
+TELEGRAF_PASSWORD/GRAFANA_READER_PASSWORD and run
+python tools/initialize_backend.py with psql installed. initialize_schema.sh/ps1
+call the same implementation. Existing schema fails. The manual initializer configures the fixed telegraf_ingest/grafana_reader roles; use this dedicated backend cluster, since altering these roles in a shared cluster could affect other databases. The old apply_migrations
+scripts were only fresh initializers and have been retired.
+
+## Archives and repair
+
+Server CSV flushes/fsyncs once per second and keeps duplicates; descriptor use
+is bounded. Local CSV flushes before its journal export cursor advances and
+repairs after failure/restart. An interrupted export can repeat rows.
+ACKed journal history remains seven days and is pruned only after export.
+Retention runs every 30 minutes; local CSV retention is configurable.
+
+Pending JSON is capped at 256 MiB. Capture is bounded to 256 records, reserving
+space for metadata/loss records. Quota/write failures are visible. Records
+buffered before SQLite commit are not durable; recovery retains the last
+committed elapsed offset and excludes downtime.
+
+PUBACK means broker handoff, not SQL/CSV receipt or power-loss durability.
+Mosquitto saves persistence each second; server CSV has an approximately
+one-second buffered window. Real OS/device/fsync behavior still needs qualification.
+SQL/consumer outages recover within finite queues: Telegraf buffers 20,000 metrics,
+allows 250 undelivered messages per subscription, and the broker caps queued
+offline messages at 10,000. Do not infer indefinite loss-free recovery.
+
+Read-only SQL snapshots use the reader role:
+
+~~~sh
+docker exec ect-backend export_to_csv.sh
+docker compose -f ops/local-stack/docker-compose.yml exec timescaledb python3 /ops/backend/export_snapshot.py --output /exports
+~~~
+
+Local export shell/PowerShell wrappers use the same Python implementation and
+PG* overrides. Partial files are removed on failure.
+
+~~~sh
+python tools/reconcile_telemetry.py --expected phone-events.json sql-telemetry.csv
+python tools/replay_csv.py events_v2_UUID.csv --session UUID --sql-snapshot sql-telemetry.csv
+~~~
+
+Replay defaults to dry-run. With Paho 2.1.0 installed, add --publish --host <broker>
+to send missing validated metric records. Original identities/times are retained;
+conflicting archives fail. Reconciliation compares all immutable metric context, normalizing SQL/CSV timestamp and numeric types; receipt time is excluded. Replay refuses conflicting SQL/archive identities. Reconcile again after replay. Metadata repair uses
+versioned session records; this tool handles metrics only.
+
+## Qualification and remaining gate
+
+~~~sh
+python -m unittest discover -s ops/backend -p 'test_*.py'
+python -m unittest discover -s tools -p 'test_*.py'
+python tools/qualify_backend.py --layout compose --report compose-report.json
+python tools/qualify_backend.py --layout single --report single-report.json
+~~~
+
+Requires Docker, PyYAML 6.0.2 and Flutter with pub get complete. It creates unique
+disposable resources/custom credentials, probes both consumers, checks malformed
+neighbors, duplicates/conflicts, delayed metadata, freshness, reset totals,
+all Grafana SQL under the reader role, real Grafana API, actual Dart CAN/SQLite/
+MQTT, SQL/CSV reconciliation, fresh-only manual initialization, reader snapshots/failure cleanup, missing-record CSV repair, outages, restarts and compressed replay. It cleans
+resources in finally; --keep-on-failure retains only its test target for diagnosis.
+CI runs both layouts.
+
+Synthetic tests establish software interoperability. Target Android/CAN, peak
+hardware/UI behavior and background/permissions remain a separate gate.
+Android SDK is unavailable on this validation host, so APK build is pending.

@@ -2478,7 +2478,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
         : '$csvDirectory/session_$normalizedSessionId.csv';
     final queueColor = state.spoolCapacityWarning
         ? p.red
-        : (state.unsentBatchCount > 0 ? p.orange : p.lightGreen);
+        : (state.pendingRecordCount > 0 ? p.orange : p.lightGreen);
     final stateColor = state.sessionState == SessionState.logging
         ? p.lightGreen
         : state.sessionState == SessionState.armed
@@ -2513,7 +2513,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                     ),
                     _buildStorageBadge(
                       label: 'QUEUE',
-                      value: '${state.unsentBatchCount}',
+                      value: '${state.pendingRecordCount}',
                       color: queueColor,
                     ),
                   ],
@@ -2530,7 +2530,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Every telemetry event is appended to one CSV per session while LOGGING. Each row is a single metric reading; open the file in any spreadsheet app. Unsent MQTT messages stay in the local spool and are replayed when the server reconnects.',
+                  'Committed metrics and session updates are exported to versioned CSV files. Pending journal records replay when the broker reconnects.',
                   style: TextStyle(
                     color: p.dimText,
                     fontSize: 10,
@@ -2555,22 +2555,12 @@ class ConfigViewState extends ConsumerState<ConfigView>
           _buildSectionHeader(
             title: 'Maintenance',
             subtitle:
-                'Destructive actions for the MQTT spool, local storage, and live state.',
+                'Clear local telemetry/CSV or reset live state. Connection preferences are preserved.',
           ),
           _settingsCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _buildCmdBtn('RESET MQTT SPOOL', () async {
-                  await state.onRequestMqttSpoolReset?.call();
-                  if (!mounted) {
-                    return;
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('MQTT spool reset.')),
-                  );
-                }),
-                const SizedBox(height: 8),
                 _buildCmdBtn('CLEAR LOCAL STORAGE', () async {
                   await state.onRequestLocalStorageClear?.call();
                   if (!mounted) {

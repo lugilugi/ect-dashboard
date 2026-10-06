@@ -9,7 +9,7 @@ void main() {
 
       state.updateMqttBacklog(count: 3, oldestEnqueuedAtUtc: oldest);
 
-      expect(state.unsentBatchCount, 3);
+      expect(state.pendingRecordCount, 3);
       expect(state.oldestUnsentAgeMs, greaterThanOrEqualTo(4000));
       expect(state.oldestUnsentAgeText.endsWith('s'), isTrue);
 
@@ -23,7 +23,7 @@ void main() {
       state.updateMqttBacklog(count: 2, oldestEnqueuedAtUtc: oldest);
       state.updateMqttBacklog(count: 0, oldestEnqueuedAtUtc: null);
 
-      expect(state.unsentBatchCount, 0);
+      expect(state.pendingRecordCount, 0);
       expect(state.oldestUnsentAgeMs, 0);
       expect(state.oldestUnsentAgeText, '0.0s');
 
@@ -33,12 +33,12 @@ void main() {
     test('spool warning is raised near pending capacity threshold', () {
       final state = DashboardState();
 
-      state.updateSpoolHealth(pendingBatchCount: 7, pendingBatchCapacity: 10);
+      state.updateSpoolHealth(pendingBytes: 7, byteCapacity: 10 * 1048576);
       expect(state.spoolCapacityWarning, isFalse);
 
-      state.updateSpoolHealth(pendingBatchCount: 8, pendingBatchCapacity: 10);
+      state.updateSpoolHealth(pendingBytes: 8 * 1048576, byteCapacity: 10 * 1048576);
       expect(state.spoolCapacityWarning, isTrue);
-      expect(state.spoolUsageText, '8/10');
+      expect(state.spoolUsageText, '8.0/10 MiB');
 
       state.dispose();
     });

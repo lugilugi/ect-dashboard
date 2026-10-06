@@ -5,64 +5,17 @@ import 'package:telemetry_dashboard/models/telemetry/can_bindings.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_decoder.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
-import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
-import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
-
-class _NoopMqttTransport implements MqttTransport {
-  void Function()? _onConnected;
-  void Function()? _onDisconnected;
-
-  @override
-  set onConnected(void Function()? callback) {
-    _onConnected = callback;
-  }
-
-  @override
-  set onDisconnected(void Function()? callback) {
-    _onDisconnected = callback;
-  }
-
-  @override
-  Future<void> connect() async {
-    _onConnected?.call();
-  }
-
-  @override
-  void disconnect() {
-    _onDisconnected?.call();
-  }
-
-  @override
-  bool get isConnected => false;
-
-  @override
-  Future<bool> publish({
-    required String topic,
-    required String payloadJson,
-  }) async {
-    return false;
-  }
-}
+import 'package:telemetry_dashboard/services/orchestration/telemetry_recorder.dart';
 
 class _BindingHarness {
   final DashboardState state = DashboardState();
-  late final LocalSpoolService spool;
-  late final MqttService mqtt;
-  late final CanBindings bindings;
-
-  _BindingHarness() {
-    spool = LocalSpoolService(forceInMemory: true);
-    mqtt = MqttService(
-      state,
-      localSpoolService: spool,
-      transport: _NoopMqttTransport(),
-    );
-    bindings = CanBindings(state, mqtt, GpsSourceManager(state));
-  }
-
+  late final TelemetryRecorder recorder = TelemetryRecorder(state);
+  late final CanBindings bindings = CanBindings(
+    state,
+    recorder,
+    GpsSourceManager(state),
+  );
   Future<void> dispose() async {
-    await mqtt.stop();
-    await spool.close();
     state.dispose();
   }
 }

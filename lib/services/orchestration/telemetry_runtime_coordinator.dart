@@ -13,10 +13,10 @@ import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
 import 'package:telemetry_dashboard/services/ingest/command_dictionary_service.dart';
 import 'package:telemetry_dashboard/services/orchestration/driver_alert_service.dart';
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
-import 'package:telemetry_dashboard/services/persistence/local_spool_service.dart';
+import 'package:telemetry_dashboard/services/persistence/telemetry_journal.dart';
 import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
 import 'package:telemetry_dashboard/services/location/phone_gps_fallback_service.dart';
-import 'package:telemetry_dashboard/services/orchestration/session_checkpoint_service.dart';
+import 'package:telemetry_dashboard/services/orchestration/telemetry_recorder.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 
 class TelemetryRuntimeCoordinator {
@@ -37,13 +37,13 @@ class TelemetryRuntimeCoordinator {
 
   late CommandDictionaryService _commandDictionaryService;
   late CanTxService _canTxService;
-  late LocalSpoolService _localSpoolService;
+  late TelemetryJournal _journal;
+  late TelemetryRecorder _recorder;
   late UsbService _usbService;
   late MqttService _mqttService;
   late GpsSourceManager _gpsSourceManager;
   DriverAlertService? _driverAlertService;
   PhoneGpsFallbackService? _phoneGpsFallbackService;
-  SessionCheckpointService? _sessionCheckpointService;
 
   TelemetryRuntimeCoordinator({
     required this.state,
@@ -77,7 +77,6 @@ class TelemetryRuntimeCoordinator {
     state.onReadableCopyRetentionDaysChanged = null;
     state.onReadableCopyMaxFileBytesChanged = null;
     state.onSimulationToggleChanged = null;
-    state.onRequestMqttSpoolReset = null;
     state.onRequestLocalStorageClear = null;
     _driverAlertService?.stop();
     if (_foregroundServiceRunning) {
@@ -85,7 +84,6 @@ class TelemetryRuntimeCoordinator {
       _foregroundServiceRunning = false;
     }
     _phoneGpsFallbackService?.stop();
-    _sessionCheckpointService?.stop();
     _preferenceSaveDebounce?.cancel();
     _setWakelock(false);
     _canTxService.dispose();
@@ -93,7 +91,10 @@ class TelemetryRuntimeCoordinator {
     // Drain the final canonical flush (publish or spool) before closing the
     // SQLite database so no last-second payload is lost on app exit.
     unawaited(
-      _mqttService.stop().whenComplete(() => _localSpoolService.close()),
+      _recorder
+          .stop()
+          .whenComplete(() => _mqttService.stop())
+          .whenComplete(() => _journal.close()),
     );
   }
 
@@ -106,31 +107,30 @@ class TelemetryRuntimeCoordinator {
     // The lock is released in dispose() when the app's runtime ends.
     _setWakelock(true);
 
-    _localSpoolService = LocalSpoolService(
+    _journal = TelemetryJournal(
       readableCopyMaxFileBytes: state.readableCopyMaxFileBytes,
     );
-    state.attachSpoolHealthStore(_localSpoolService.spoolHealth);
+    state.attachSpoolHealthStore(_journal.spoolHealth);
 
     state.onRequestReadableCopyPreview = () {
-      return _localSpoolService.readReadableCopyPreview(
+      return _journal.readReadableCopyPreview(
         maxFiles: 6,
         maxLinesPerFile: 8,
         maxLineLength: 220,
       );
     };
     state.onRequestReadableCopyExport = () {
-      return _localSpoolService.exportReadableCopy();
+      return _journal.exportReadableCopy();
     };
     state.onReadableCopyRetentionDaysChanged = (retentionDays) {
-      return _localSpoolService.pruneReadableCopyOlderThan(
-        Duration(days: retentionDays),
-      );
+      return _journal.pruneReadableCopyOlderThan(Duration(days: retentionDays));
     };
     state.onReadableCopyMaxFileBytesChanged = (maxFileBytes) {
-      return _localSpoolService.setReadableCopyMaxFileBytes(maxFileBytes);
+      return _journal.setReadableCopyMaxFileBytes(maxFileBytes);
     };
 
-    _mqttService = MqttService(state, localSpoolService: _localSpoolService);
+    _recorder = TelemetryRecorder(state, journal: _journal);
+    _mqttService = MqttService(state, journal: _journal);
     _driverAlertService = DriverAlertService(state: state);
     _driverAlertService!.start();
 
@@ -145,7 +145,16 @@ class TelemetryRuntimeCoordinator {
       sendRawFrame: (frame) {
         _usbService.sendString(frame);
       },
-      onResult: state.recordCanTxResult,
+      onResult: (result) {
+        state.recordCanTxResult(result);
+        _recorder.record(
+          'Command_${result.status.name}',
+          1,
+          source: 'command',
+          unit: 'count',
+          diagnostic: true,
+        );
+      },
       isDriverMode: () => state.uiMode == UiMode.driver,
       isLogging: () => state.isLogging,
     );
@@ -164,10 +173,9 @@ class TelemetryRuntimeCoordinator {
 
     _usbService = UsbService(
       state,
-      _mqttService,
+      _recorder,
       _gpsSourceManager,
       canTxService: _canTxService,
-      localSpoolService: _localSpoolService,
       canIngestRepository: canIngestRepository,
     );
     state.attachUsbDebugLogStore(_usbService.debugLog);
@@ -176,9 +184,7 @@ class TelemetryRuntimeCoordinator {
     state.onUsbPortSelectionChanged = _usbService.applyPortSelection;
     state.onUsbBaudRateChanged = _usbService.applyBaudRate;
     state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
-    state.onRequestMqttSpoolReset = () => _mqttService.resetSpool();
-    state.onRequestLocalStorageClear = () =>
-        _localSpoolService.clearAllLocalStorage();
+    state.onRequestLocalStorageClear = _resetLocalStorage;
 
     state.addListener(_handleStateChanged);
     state.addListener(_handleStatePreferenceSync);
@@ -188,52 +194,84 @@ class TelemetryRuntimeCoordinator {
   }
 
   void _publishPhoneFallbackTelemetry(PhoneGpsSample sample) {
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Latitude_Deg',
       sample.latitude,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'deg',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Longitude_Deg',
       sample.longitude,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'deg',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Speed_Kmh',
       sample.speedKmh,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'km/h',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Heading_Deg',
-      sample.headingDeg.isNaN ? 0.0 : sample.headingDeg,
+      sample.headingDeg,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'deg',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Accuracy_M',
       sample.accuracyM,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'm',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Locked',
       sample.locked ? 1.0 : 0.0,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'bool',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Fallback_Active',
       1.0,
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'bool',
     );
-    _mqttService.publish(
+    _recorder.record(
       'GPS_Fallback_Period_Ms',
       state.gpsFallbackPeriodMs.toDouble(),
       source: 'phone_gps',
+      observedAtUtc: sample.timestampUtc,
+      sourceSampleId: sample.timestampUtc.toUtc().toIso8601String(),
+      freshnessMs: state.gpsFallbackPeriodMs * 3,
+      quality: sample.locked ? 'ok' : 'invalid',
       unit: 'ms',
     );
   }
@@ -253,12 +291,7 @@ class TelemetryRuntimeCoordinator {
     }
 
     _servicesStarted = true;
-    _sessionCheckpointService ??= SessionCheckpointService(
-      state: state,
-      localSpoolService: _localSpoolService,
-      mqttService: _mqttService,
-    );
-    await _sessionCheckpointService!.start();
+    await _recorder.start();
     if (_disposed) {
       return;
     }
@@ -269,11 +302,40 @@ class TelemetryRuntimeCoordinator {
     }
 
     state.setReadableCopyDirectoryPath(
-      _localSpoolService.sessionCsvPath ?? _localSpoolService.readableCopyPath,
+      _journal.sessionCsvPath ?? _journal.readableCopyPath,
     );
     await state.refreshReadableCopyPreview();
     unawaited(_phoneGpsFallbackService?.start());
     _usbService.start();
+  }
+
+  Future<void> _resetLocalStorage() async {
+    _usbService.stop();
+    _phoneGpsFallbackService?.stop();
+    await _recorder.stop();
+    await _mqttService.stop();
+    state.resetSessionState();
+    await _journal.clearAllLocalStorage();
+    _recorder = TelemetryRecorder(state, journal: _journal);
+    // USB bindings keep their recorder reference; reset its capture state instead.
+    _usbService.stop();
+    _usbService = UsbService(
+      state,
+      _recorder,
+      _gpsSourceManager,
+      canTxService: _canTxService,
+      canIngestRepository: canIngestRepository,
+    );
+    state.attachUsbDebugLogStore(_usbService.debugLog);
+    state.onUsbTx = _usbService.sendString;
+    state.onRequestUsbPortOptions = _usbService.listPortOptions;
+    state.onUsbPortSelectionChanged = _usbService.applyPortSelection;
+    state.onUsbBaudRateChanged = _usbService.applyBaudRate;
+    state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
+    await _recorder.start();
+    await _mqttService.start();
+    _usbService.start();
+    unawaited(_phoneGpsFallbackService?.start());
   }
 
   void _handleStatePreferenceSync() {

@@ -1,7 +1,8 @@
 import 'package:telemetry_dashboard/models/telemetry/can_decoder.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
-import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
+import 'package:telemetry_dashboard/services/orchestration/telemetry_recorder.dart';
+import 'package:uuid/uuid.dart';
 
 enum CanValueTransform {
   identity,
@@ -225,7 +226,15 @@ CanTelemetryBinding? canTelemetryBindingFor(int canId, String signalName) {
 
 class CanBindings {
   final DashboardState state;
-  final MqttService mqttService;
+  final TelemetryRecorder recorder;
+  DateTime _receivedAtUtc = DateTime.now().toUtc();
+  DateTime? _positionAtUtc;
+  DateTime? _motionAtUtc;
+  DateTime? _statusAtUtc;
+  String? _positionId;
+  String? _emittedPositionId;
+  int _freshnessMs = 5000;
+  int _lapAtReception = 1;
   final GpsSourceManager gpsSourceManager;
 
   int _externalGpsSatellites = 0;
@@ -238,9 +247,15 @@ class CanBindings {
   double? _externalGpsSpeedKmh;
   double? _externalGpsHeadingDeg;
 
-  CanBindings(this.state, this.mqttService, this.gpsSourceManager);
+  CanBindings(this.state, this.recorder, this.gpsSourceManager);
 
   void handle(DecodedCanMessage message, {required DateTime receivedAtUtc}) {
+    _receivedAtUtc = receivedAtUtc;
+    _lapAtReception = state.lapNumber;
+    _freshnessMs = ((message.definition.cycleTimeMs ?? 1000) * 3).clamp(
+      1000,
+      30000,
+    );
     switch (message.canId) {
       case CanIds.pedalStatus:
         state.updatePedal(
@@ -305,21 +320,22 @@ class CanBindings {
         break;
 
       case CanIds.gpsStatus:
+        _statusAtUtc = receivedAtUtc;
         _externalGpsStatusSeen = true;
         _externalGpsSatellites = message.value('satellites').round();
         _externalGpsLocked = message.value('fix_valid') >= 0.5;
         _externalGpsPositionValid = message.value('position_valid') >= 0.5;
         _externalGpsMotionValid = message.value('motion_valid') >= 0.5;
-        gpsSourceManager.markExternalHeartbeat();
         _tryEmitExternalGpsSample(receivedAtUtc);
         _publishSignals(message, const <String>['satellites', 'fix_valid']);
         _publishSyntheticExternalGpsState();
         break;
 
       case CanIds.gpsPosition:
+        _positionAtUtc = receivedAtUtc;
+        _positionId = const Uuid().v4();
         _externalGpsLat = message.value('latitude_deg');
         _externalGpsLon = message.value('longitude_deg');
-        gpsSourceManager.markExternalHeartbeat();
         _tryEmitExternalGpsSample(receivedAtUtc);
         _publishSignals(message, const <String>[
           'latitude_deg',
@@ -328,9 +344,9 @@ class CanBindings {
         break;
 
       case CanIds.gpsMotion:
+        _motionAtUtc = receivedAtUtc;
         _externalGpsSpeedKmh = message.value('gps_speed_kmh');
         _externalGpsHeadingDeg = message.value('heading_deg');
-        gpsSourceManager.markExternalHeartbeat();
         _tryEmitExternalGpsSample(receivedAtUtc);
         _publishSignals(message, const <String>[
           'gps_speed_kmh',
@@ -397,30 +413,49 @@ class CanBindings {
       if (binding == null) {
         continue;
       }
-      mqttService.publish(
+      recorder.record(
         binding.metricName,
         binding.transformValue(message.value(signalName)),
         source: binding.source,
         unit: binding.unit,
         canId: message.canId,
+        lapNumber: _lapAtReception,
+        observedAtUtc: _receivedAtUtc,
+        freshnessMs: _freshnessMs,
+        sourceSampleId: message.canId == CanIds.gpsPosition
+            ? _positionId
+            : null,
+        quality:
+            message.canId == CanIds.gpsPosition &&
+                (!_externalGpsLocked ||
+                    !_externalGpsPositionValid ||
+                    _statusAtUtc == null ||
+                    _receivedAtUtc.difference(_statusAtUtc!).inMilliseconds >
+                        3000)
+            ? 'invalid'
+            : 'ok',
       );
     }
   }
 
   void _publishSyntheticExternalGpsState() {
-    mqttService.publish(
+    recorder.record(
       'GPS_Fallback_Active',
       0.0,
       source: 'external_gps',
       unit: 'bool',
       canId: CanIds.gpsStatus,
+      observedAtUtc: _receivedAtUtc,
+      freshnessMs: _freshnessMs,
     );
-    mqttService.publish(
+    recorder.record(
       'GPS_Fallback_Period_Ms',
       state.gpsFallbackPeriodMs.toDouble(),
       source: 'external_gps',
       unit: 'ms',
       canId: CanIds.gpsStatus,
+      observedAtUtc: _receivedAtUtc,
+      freshnessMs: _freshnessMs,
     );
   }
 
@@ -437,10 +472,19 @@ class CanBindings {
         lat == null ||
         lon == null ||
         speed == null ||
-        heading == null) {
+        heading == null ||
+        _positionId == _emittedPositionId ||
+        _positionAtUtc == null ||
+        _motionAtUtc == null ||
+        _statusAtUtc == null ||
+        receivedAtUtc.difference(_positionAtUtc!).inMilliseconds > 3000 ||
+        receivedAtUtc.difference(_statusAtUtc!).inMilliseconds > 3000 ||
+        receivedAtUtc.difference(_motionAtUtc!).inMilliseconds > 3000) {
       return;
     }
 
+    _emittedPositionId = _positionId;
+    gpsSourceManager.markExternalHeartbeat();
     gpsSourceManager.ingestExternalSample(
       satellites: _externalGpsSatellites,
       locked: _externalGpsLocked,
@@ -448,7 +492,7 @@ class CanBindings {
       lon: lon,
       headingDeg: heading,
       speedKmh: speed,
-      timestampUtc: receivedAtUtc,
+      timestampUtc: _positionAtUtc!,
     );
   }
 }

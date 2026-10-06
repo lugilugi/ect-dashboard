@@ -1,42 +1,9 @@
-# ECT Backend - Single Container
+# Backend deployment inputs
 
-The whole telemetry backend (TimescaleDB + Mosquitto + Telegraf + Grafana) in
-one image, orchestrated by supervisord. No compose, no multi-service wiring -
-just build and run:
+Both layouts share the broker/ingest configuration and CSV code here.
+The single Dockerfile assembles pinned TimescaleDB/Telegraf/Grafana components
+under Supervisor/tini. Compose runs them separately and serves CSV read-only.
 
-```bash
-# from the repository root (the whole repo is the build context)
-docker build -t ect-backend -f ops/backend/Dockerfile .
-docker run -d --name ect-backend \
-  --restart unless-stopped \
-  -p 1883:1883 -p 5432:5432 -p 3000:3000 -p 8080:8080 \
-  -e POSTGRES_PASSWORD=changeme \
-  -e GRAFANA_ADMIN_PASSWORD=changeme \
-  ect-backend
-```
-
-The container runs under tini (PID 1), pins Telegraf 1.31.x / Grafana 13.1.1,
-and its healthcheck covers Postgres, the MQTT broker, and both CSV services.
-
-Then:
-
-- MQTT broker at `mqtt://<host>:1883` (topic `telemetry/eco_archers/events`)
-- Grafana at `http://<host>:3000` (admin / your password)
-- TimescaleDB at `postgres://<host>:5432/telemetry`
-- CSV downloads at `http://<host>:8080/` (continuous per-session streamer files
-  plus timestamped snapshot exports, all kept indefinitely)
-
-Everything is configurable with `-e` environment variables - see
-[BACKEND_GUIDE.md](../../BACKEND_GUIDE.md) for the full reference, the CAN
-signal how-to, and troubleshooting.
-
-## Files
-
-- `Dockerfile` - the whole stack in one image
-- `Dockerfile.csv-streamer` - minimal image for the compose CSV streamer
-- `supervisord.conf` - runs postgres, mosquitto, telegraf, csv-server, csv-streamer, grafana
-- `mosquitto.conf` - broker config (anonymous, local dev)
-- `telegraf.conf` - MQTT -> TimescaleDB ingest (env-driven topics)
-- `csv_streamer.py` - continuous MQTT -> CSV logging (1s fsync, no retention)
-
-Prefer separate containers? Use `ops/local-stack/docker-compose.yml` instead.
+See [backend operations](../../BACKEND_GUIDE.md) for setup, environment, roles,
+schema readiness/reset/recovery and checks. See
+[verification](../../docs/implementation/verification.md) for evidence and limits.

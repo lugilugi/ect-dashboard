@@ -1,2 +1,8 @@
 *.dbc text eol=lf
 *.g.dart text eol=lf
+*.sh text eol=lf
+*.sql text eol=lf
+*.conf text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+Dockerfile* text eol=lf
