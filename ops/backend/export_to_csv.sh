@@ -28,7 +28,7 @@ EXPORT_DIR="${EXPORT_DIR:-/exports}"
 mkdir -p "$EXPORT_DIR"
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-TABLES="sessions laps telemetry_raw"
+TABLES="sessions lap_bounds telemetry_samples ingest_rejections"
 
 echo "Exporting to $EXPORT_DIR (stamp $STAMP)"
 for t in $TABLES; do

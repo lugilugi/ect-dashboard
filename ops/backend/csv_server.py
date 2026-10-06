@@ -13,6 +13,7 @@ expose it in trusted networks (same hardening guidance as Mosquitto).
 
 import http.server
 import os
+from pathlib import Path
 
 PORT = int(os.environ.get("CSV_SERVER_PORT", "8080"))
 ROOT = os.environ.get("EXPORT_DIR", "/var/lib/ect-backend/exports")
@@ -22,6 +23,12 @@ os.makedirs(ROOT, exist_ok=True)
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
+
+    def translate_path(self, path):
+        translated = Path(super().translate_path(path)).resolve()
+        if not translated.is_relative_to(Path(ROOT).resolve()):
+            return str(Path(ROOT) / '.forbidden')
+        return str(translated)
 
     def log_message(self, fmt, *args):
         pass  # keep container logs quiet

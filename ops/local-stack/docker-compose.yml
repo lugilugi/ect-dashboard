@@ -1,18 +1,21 @@
 services:
   timescaledb:
     image: timescale/timescaledb:2.17.2-pg16
-    container_name: ect-timescaledb
     restart: unless-stopped
     init: true
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-telemetry}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      TELEGRAF_PASSWORD: ${TELEGRAF_PASSWORD:-telegraf}
+      GRAFANA_READER_PASSWORD: ${GRAFANA_READER_PASSWORD:-grafana}
     ports:
       - "${TS_PORT:-5432}:5432"
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ../../db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ../backend/init_roles.sh:/docker-entrypoint-initdb.d/02_roles.sh:ro
+      - ../../db/scripts/bootstrap_roles.sql:/etc/ect/bootstrap_roles.sql:ro
       # Server-side CSV export: script + writable export folder.
       - ../../ops/backend:/ops/backend:ro
       - ../../csv_exports:/exports
@@ -20,7 +23,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-telemetry}",
+          "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB -Atc 'SELECT version FROM schema_metadata' | grep -qx 2",
         ]
       interval: 5s
       timeout: 5s
@@ -30,23 +33,21 @@ services:
 
   mosquitto:
     image: eclipse-mosquitto:2.0
-    container_name: ect-mosquitto
     restart: unless-stopped
     init: true
     ports:
       - "${MQTT_PORT:-1883}:1883"
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - mosquitto_data:/mosquitto/data
+      - ../backend/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/var/lib/mosquitto
       - mosquitto_log:/mosquitto/log
     networks:
       - telemetry_net
 
   telegraf:
-    build:
-      context: ./telegraf
-      dockerfile: Dockerfile
-    container_name: ect-telegraf
+    image: telegraf:1.31.3
+    volumes:
+      - ../backend/telegraf.conf:/etc/telegraf/telegraf.conf:ro
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -64,8 +65,8 @@ services:
       TS_HOST: timescaledb
       TS_PORT: 5432
       TS_DB: ${POSTGRES_DB:-telemetry}
-      TS_USER: ${POSTGRES_USER:-postgres}
-      TS_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      TS_USER: telegraf_ingest
+      TS_PASSWORD: ${TELEGRAF_PASSWORD:-telegraf}
     networks:
       - telemetry_net
 
@@ -73,7 +74,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.csv-streamer
-    container_name: ect-csv-streamer
     depends_on:
       mosquitto:
         condition: service_started
@@ -91,9 +91,25 @@ services:
     networks:
       - telemetry_net
 
+  csv-server:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.csv-streamer
+    command: ["python3", "/usr/local/bin/csv_server.py"]
+    restart: unless-stopped
+    init: true
+    environment:
+      EXPORT_DIR: /exports
+      CSV_SERVER_PORT: 8080
+    ports:
+      - "${CSV_SERVER_PORT:-8080}:8080"
+    volumes:
+      - ../../csv_exports:/exports:ro
+    networks:
+      - telemetry_net
+
   grafana:
     image: grafana/grafana-oss:11.1.4
-    container_name: ect-grafana
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -105,9 +121,9 @@ services:
       # Machine-local timezone for dashboards (the machine viewing them).
       GF_DASHBOARDS_DEFAULT_TIMEZONE: browser
       TS_DATASOURCE_URL: timescaledb:5432
-      TS_DATASOURCE_USER: ${POSTGRES_USER:-postgres}
+      TS_DATASOURCE_USER: grafana_reader
       TS_DATASOURCE_DB: ${POSTGRES_DB:-telemetry}
-      TS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      TS_DATASOURCE_PASSWORD: ${GRAFANA_READER_PASSWORD:-grafana}
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     volumes:

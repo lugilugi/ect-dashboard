@@ -1,144 +1,25 @@
-# =============================================================================
-# ECT Dashboard - Single-container telemetry backend
-#
-# TimescaleDB (PostgreSQL) + Mosquitto (MQTT broker) + Telegraf (ingest)
-# + CSV streamer/file server + Grafana (dashboards) in ONE image,
-# orchestrated by supervisord.
-#
-# Base: postgres:16-bookworm (Debian) + TimescaleDB from the official
-# Timescale Debian repo. Mosquitto comes from Debian, Telegraf from the
-# InfluxData repo, Grafana from the Grafana repo - every component from its
-# official source, one distro, no distro mixing.
-#
-# Build (from the repository ROOT - the whole repo is the build context):
-#   docker build -t ect-backend -f ops/backend/Dockerfile .
-#
-# Run:
-#   docker run -d --name ect-backend \
-#     -p 1883:1883 -p 5432:5432 -p 3000:3000 \
-#     -e POSTGRES_PASSWORD=changeme \
-#     -e GRAFANA_ADMIN_PASSWORD=changeme \
-#     ect-backend
-#
-# Every setting is overridable via environment variables (-e ...).
-# See BACKEND_GUIDE.md for the full reference and the CAN signal how-to.
-# =============================================================================
-FROM postgres:16-bookworm
-
-# --- TimescaleDB + base system packages --------------------------------------
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       curl \
-       ca-certificates \
-       gnupg \
-       supervisor \
-       tini \
-       mosquitto \
-       mosquitto-clients \
-       python3-paho-mqtt \
-    && curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey \
-        | gpg --dearmor -o /usr/share/keyrings/timescale.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/timescale.gpg] https://packagecloud.io/timescale/timescaledb/debian/ bookworm main" \
-        > /etc/apt/sources.list.d/timescaledb.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends timescaledb-2-postgresql-16 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Preload the TimescaleDB extension on every new database (the postgres
-# entrypoint copies this sample config into a fresh data dir on first boot).
-RUN echo "shared_preload_libraries = 'timescaledb'" \
-        >> /usr/share/postgresql/16/postgresql.conf.sample
-
-# --- Telegraf (InfluxData apt repository) -------------------------------------
-# influxdata-archive.key is the current signing key (fingerprint
-# 24C975CBA61A024EE1B631787C3D57159FC2F927). Do NOT use the older
-# influxdata-archive_compat.key - it expired 2026-01-17.
-RUN curl -fsSL https://repos.influxdata.com/influxdata-archive.key \
-        | gpg --dearmor -o /usr/share/keyrings/influxdata-archive-keyring.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/influxdata-archive-keyring.gpg] https://repos.influxdata.com/debian stable main" \
-        > /etc/apt/sources.list.d/influxdata.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends 'telegraf=1.31.*' \
-    && rm -rf /var/lib/apt/lists/*
-
-# --- Grafana (Grafana apt repository) -----------------------------------------
-# Pinned for reproducible builds. Grafana >=13 changed its default
-# provisioning path to /usr/share/grafana/conf/provisioning, so our
-# provisioning files live in a dedicated dir selected via GF_PATHS_PROVISIONING
-# (see the runtime config below).
-RUN curl -fsSL https://apt.grafana.com/gpg.key \
-        | gpg --dearmor -o /usr/share/keyrings/grafana-apt.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/grafana-apt.gpg] https://apt.grafana.com stable main" \
-        > /etc/apt/sources.list.d/grafana.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends grafana=13.1.1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# --- runtime configuration -----------------------------------------------------
-COPY ops/backend/supervisord.conf /etc/supervisor/conf.d/ect-backend.conf
+# Both layouts use the same database, ingest and dashboard releases.
+FROM telegraf:1.31.3 AS ingest
+FROM grafana/grafana-oss:11.1.4 AS dashboards
+FROM timescale/timescaledb:2.17.2-pg16
+RUN apk add --no-cache supervisor tini mosquitto mosquitto-clients python3 py3-paho-mqtt     libstdc++ ca-certificates wget  && addgroup -S ect && adduser -S -G ect ect  && addgroup -S grafana && adduser -S -G grafana grafana
+COPY --from=ingest /usr/bin/telegraf /usr/bin/telegraf
+COPY --from=dashboards /usr/share/grafana /usr/share/grafana
+COPY ops/backend/supervisord.conf /etc/supervisord.conf
 COPY ops/backend/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY ops/backend/telegraf.conf /etc/telegraf/telegraf.conf
-COPY ops/backend/export_to_csv.sh /usr/local/bin/export_to_csv.sh
-COPY ops/backend/csv_server.py /usr/local/bin/csv_server.py
-COPY ops/backend/csv_streamer.py /usr/local/bin/csv_streamer.py
-COPY ops/backend/telemetry_contract.py /usr/local/bin/telemetry_contract.py
+COPY ops/backend/csv_streamer.py ops/backend/csv_server.py ops/backend/telemetry_contract.py /usr/local/bin/
+COPY ops/backend/export_to_csv.sh ops/backend/wait-for-schema.sh ops/backend/healthcheck.sh /usr/local/bin/
 COPY ops/backend/docker-entrypoint.sh /usr/local/bin/ect-entrypoint.sh
 COPY db/schema.sql /docker-entrypoint-initdb.d/01_schema.sql
-# Provisioning goes in a dedicated dir (not /etc/grafana/provisioning, which
-# the package seeds with sample files) and is selected via GF_PATHS_PROVISIONING.
+COPY ops/backend/init_roles.sh /docker-entrypoint-initdb.d/02_roles.sh
+COPY db/scripts/bootstrap_roles.sql /etc/ect/bootstrap_roles.sql
 COPY ops/grafana/provisioning /etc/grafana/provisioning-ect
 COPY ops/grafana/dashboards /var/lib/grafana/dashboards
-
-RUN chmod +x /usr/local/bin/export_to_csv.sh /usr/local/bin/ect-entrypoint.sh \
-    && mkdir -p /var/lib/ect-backend/exports /var/lib/mosquitto \
-    && chown telegraf:telegraf /var/lib/ect-backend/exports \
-    && chown mosquitto:mosquitto /var/lib/mosquitto \
-    && chown -R grafana:grafana /var/lib/grafana /etc/grafana/provisioning-ect
-
-# --- default configuration (override any of these with `-e`) -------------------
-ENV POSTGRES_DB=telemetry \
-    POSTGRES_USER=postgres \
-    POSTGRES_PASSWORD=postgres \
-    GRAFANA_ADMIN_USER=admin \
-    GRAFANA_ADMIN_PASSWORD=admin \
-    TELEGRAF_EVENTS_CLIENT_ID=ect-telegraf-events-v2-single \
-    TELEGRAF_SESSIONS_CLIENT_ID=ect-telegraf-sessions-v2-single \
-    CSV_CLIENT_ID=ect-csv-v2-single \
-    TOPIC_EVENTS=telemetry/eco_archers/events \
-    TOPIC_SESSIONS=telemetry/eco_archers/sessions \
-    MQTT_HOST=127.0.0.1 \
-    MQTT_PORT=1883 \
-    TS_HOST=127.0.0.1 \
-    TS_PORT=5432 \
-    TS_DB=telemetry \
-    TS_USER=postgres \
-    TS_PASSWORD=postgres \
-    TS_DATASOURCE_URL=localhost:5432 \
-    TS_DATASOURCE_USER=postgres \
-    TS_DATASOURCE_DB=telemetry \
-    TS_DATASOURCE_PASSWORD=postgres \
-    EXPORT_DIR=/var/lib/ect-backend/exports \
-    CSV_SERVER_PORT=8080 \
-    GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect \
-    GF_PATHS_DATA=/var/lib/grafana \
-    GF_PATHS_LOGS=/var/lib/grafana/log \
-    GF_PATHS_PLUGINS=/var/lib/grafana/plugins \
-    # Show dashboard times in the local timezone of the machine viewing
-    # them (browser) instead of UTC. The provisioned dashboards also set
-    # "timezone": "browser" individually.
-    GF_DASHBOARDS_DEFAULT_TIMEZONE=browser
-
+RUN chmod +x /usr/local/bin/*.sh /docker-entrypoint-initdb.d/02_roles.sh  && mkdir -p /var/lib/ect-backend/exports /var/lib/mosquitto /var/lib/grafana  && chown -R grafana:grafana /var/lib/grafana
+ENV POSTGRES_DB=telemetry POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres     GRAFANA_ADMIN_USER=admin GRAFANA_ADMIN_PASSWORD=admin     TELEGRAF_PASSWORD=telegraf GRAFANA_READER_PASSWORD=grafana     TELEGRAF_EVENTS_CLIENT_ID=ect-telegraf-events-v2-single     TELEGRAF_SESSIONS_CLIENT_ID=ect-telegraf-sessions-v2-single     CSV_CLIENT_ID=ect-csv-v2-single     TOPIC_EVENTS=telemetry/eco_archers/events     TOPIC_SESSIONS=telemetry/eco_archers/sessions     MQTT_HOST=127.0.0.1 MQTT_PORT=1883     EXPORT_DIR=/var/lib/ect-backend/exports CSV_SERVER_PORT=8080     GF_PATHS_PROVISIONING=/etc/grafana/provisioning-ect     GF_PATHS_DATA=/var/lib/grafana GF_PATHS_LOGS=/var/lib/grafana/log     GF_PATHS_PLUGINS=/var/lib/grafana/plugins GF_DASHBOARDS_DEFAULT_TIMEZONE=browser
 VOLUME ["/var/lib/postgresql/data", "/var/lib/ect-backend/exports", "/var/lib/mosquitto", "/var/lib/grafana"]
-
 EXPOSE 1883 5432 3000 8080
-
-HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=5 \
-  CMD pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-      && timeout 5 mosquitto_pub -h 127.0.0.1 -p 1883 -t ect/healthcheck -m ok -q 1 >/dev/null 2>&1 \
-      && supervisorctl status csv-server | grep -q RUNNING \
-      && supervisorctl status csv-streamer | grep -q RUNNING \
-      || exit 1
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
+HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=5 CMD /usr/local/bin/healthcheck.sh
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["/usr/local/bin/ect-entrypoint.sh"]

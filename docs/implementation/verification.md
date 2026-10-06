@@ -50,3 +50,22 @@ test --no-pub: 87 passed. New tests verify restart sequence recovery, offline
 completion, exact-context retry and ACK ownership. Command/deadman and existing
 UI/GPS regressions pass. Fewer tests reflect removal of the retired fake spool
 implementation; this is not a comparison of physical-device coverage.
+
+## Stage 06 — deployment parity
+
+Single image now reuses the exact Compose TimescaleDB 2.17.2/PG16, Telegraf
+1.31.3 and Grafana 11.1.4 binaries instead of independent apt package streams.
+Both layouts share Telegraf and Mosquitto configuration, bounded ingest/reader
+roles, fresh-only role initialization, source contract version readiness and CSV
+HTTP service. PostgreSQL readiness uses TCP, after temporary initialization.
+Derived SQL read models are initialized with the owned schema and reader grants.
+Paho uses its current v2 callback API; CSV processes drop to nobody in Compose.
+Shell sources have LF line endings (the first Windows-context image exposed
+a CRLF shebang failure, repaired before the successful startup).
+
+Evidence: disposable single container with custom DB/user/passwords was healthy;
+two MQTT records became two distinct SQL times; ingest view insert allowed while
+direct raw-table insert denied; independent CSV output exists. Disposable Compose
+with custom credentials ingested the same fixture and served its CSV over HTTP.
+Final shared-image rebuild and restart/outage qualification remain stage 08.
+No installed data volume or live deployment was changed.

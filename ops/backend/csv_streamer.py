@@ -95,7 +95,7 @@ def main():
     import paho.mqtt.client as mqtt
 
     sink = CsvSink(EXPORT_DIR)
-    client = mqtt.Client(client_id=os.environ.get("CSV_CLIENT_ID", "ect-csv-v2"),
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=os.environ.get("CSV_CLIENT_ID", "ect-csv-v2"),
                          clean_session=False)
     client.on_connect = on_connect
     client.on_message = on_message

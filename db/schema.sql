@@ -245,3 +245,32 @@ WHERE source_sample_id IS NOT NULL AND quality='ok'
   AND signal_name IN ('GPS_Latitude_Deg','GPS_Longitude_Deg')
 GROUP BY session_uid,source,source_sample_id
 HAVING count(DISTINCT signal_name)=2;
+
+-- Shared one-second summaries are estimates over available samples, never
+-- interpolation across outages. NULL means a required signal was absent.
+CREATE VIEW telemetry_seconds AS
+SELECT session_uid,lap_number,time_bucket('1 second',time) AS time,
+  avg(value) FILTER(WHERE signal_name='Speed_Kmh') AS speed_kmh,
+  avg(value) FILTER(WHERE signal_name='Voltage_780') AS voltage_v,
+  avg(value) FILTER(WHERE signal_name='Current_780') AS current_a,
+  max(value) FILTER(WHERE signal_name='Throttle_Percent') AS throttle_percent,
+  max(value) FILTER(WHERE signal_name='Brake_Active') AS brake_active
+FROM telemetry_raw WHERE quality='ok' AND sample_kind<>'diagnostic'
+GROUP BY session_uid,lap_number,time_bucket('1 second',time);
+
+CREATE VIEW lap_analytics AS
+WITH observed AS (
+  SELECT DISTINCT session_uid,lap_number FROM telemetry_raw WHERE lap_number IS NOT NULL
+), stats AS (
+  SELECT session_uid,lap_number,avg(speed_kmh) AS avg_speed_kmh,
+    max(speed_kmh) AS max_speed_kmh,avg(voltage_v*current_a) AS avg_power_w,
+    max(voltage_v*current_a) AS peak_power_w
+  FROM telemetry_seconds GROUP BY session_uid,lap_number
+)
+SELECT o.session_uid,o.lap_number,b.ended_at IS NOT NULL AS completed,
+  b.duration_seconds,t.distance_km,t.energy_j,
+  t.distance_km/NULLIF(t.energy_j/3600000.0,0) AS eff_km_per_kwh,
+  s.avg_speed_kmh,s.max_speed_kmh,s.avg_power_w,s.peak_power_w
+FROM observed o LEFT JOIN lap_bounds b USING(session_uid,lap_number)
+LEFT JOIN lap_totals t USING(session_uid,lap_number)
+LEFT JOIN stats s USING(session_uid,lap_number);
