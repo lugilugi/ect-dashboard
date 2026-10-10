@@ -262,3 +262,30 @@ with explicit small typography fixed it, and the existing Driver/dashboard tests
 then passed. No new mock of the remote tile response was used as proof that maps
 work. The signed rc.3 build and remote CI outcomes are recorded in the release
 status artifact after publication.
+
+
+## BLE vehicle link
+
+BLE (ESP32-C3 Nordic UART Service) is now a user-selected alternative to USB
+on Android; firmware contract in [ble-link.md](ble-link.md). UsbService keeps
+the line pipeline, reconnect loop and simulator and delegates only bytes to a
+transport (UsbSerialTransport or BleNusTransport). USB and desktop serial code
+moved without behavior change. Telemetry events, SQL, CSV and the backend are
+unchanged; only the debug CAN log labels frames `ble`. The BLE package is
+flutter_reactive_ble 5.5.0 (BSD-3); bonding uses an app MethodChannel.
+
+Checks: pub get succeeded; full analyzer reported no issues; all Flutter tests
+passed. New tests feed split and coalesced byte chunks through both link modes
+via a fake transport (identical decode), resolve a command ack split across
+notifications, check that a mode switch drops the old partial line, and cover
+MTU chunking plus link-mode/BLE-device persistence. No Android SDK was
+available, so the APK, the Kotlin bond handler and the plugin's Gradle build are
+unverified locally.
+
+Open BLE hardware gates (a BLE-mode release is not qualified until done):
+APK build; pairing with the passkey, and an unbonded phone refused; sustained
+full-load ingest with no overflow logs and expected RX stats; 100 commands with
+TX->ack under 350 ms and no timeouts; out-of-range reconnect while logging;
+screen-off session with the foreground service (add the connectedDevice type
+only if this drops); external GPS triplets within 3 s; USB<->BLE switch
+mid-session; timestamp skew compared with USB at the same load.

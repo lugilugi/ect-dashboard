@@ -10,10 +10,16 @@ class MainActivity : FlutterActivity() {
 		private const val FOREGROUND_CHANNEL = "ect_dashboard/foreground_telemetry"
 		private const val FUSED_LOCATION_CHANNEL = "ect_dashboard/fused_location"
 		private const val ALERT_CUE_CHANNEL = "ect_dashboard/alert_cue"
+		private const val BLE_BOND_CHANNEL = "ect_dashboard/ble_bond"
 	}
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
+
+		MethodChannel(
+			flutterEngine.dartExecutor.binaryMessenger,
+			BLE_BOND_CHANNEL,
+		).setMethodCallHandler(BleBondHandler(this))
 
 		EventChannel(
 			flutterEngine.dartExecutor.binaryMessenger,

@@ -171,6 +171,19 @@ class TelemetryRuntimeCoordinator {
       );
     }
 
+    _wireLinkService();
+    state.onRequestLocalStorageClear = _resetLocalStorage;
+
+    state.addListener(_handleStateChanged);
+    state.addListener(_handleStatePreferenceSync);
+    _handleStateChanged();
+
+    _initialized = true;
+  }
+
+  /// Builds the vehicle link service (USB or BLE per state.linkMode) and
+  /// routes the DashboardState callbacks to it.
+  void _wireLinkService() {
     _usbService = UsbService(
       state,
       _recorder,
@@ -183,14 +196,12 @@ class TelemetryRuntimeCoordinator {
     state.onRequestUsbPortOptions = _usbService.listPortOptions;
     state.onUsbPortSelectionChanged = _usbService.applyPortSelection;
     state.onUsbBaudRateChanged = _usbService.applyBaudRate;
+    state.onLinkModeChanged = _usbService.applyLinkMode;
+    state.onBleDeviceSelectionChanged = _usbService.applyBleDeviceSelection;
+    state.onRequestBlePair = _usbService.pairBleDevice;
+    state.onRequestBleUnpair = _usbService.unpairBleDevice;
+    state.onRequestBleBondState = _usbService.bleBondState;
     state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
-    state.onRequestLocalStorageClear = _resetLocalStorage;
-
-    state.addListener(_handleStateChanged);
-    state.addListener(_handleStatePreferenceSync);
-    _handleStateChanged();
-
-    _initialized = true;
   }
 
   void _publishPhoneFallbackTelemetry(PhoneGpsSample sample) {
@@ -319,19 +330,7 @@ class TelemetryRuntimeCoordinator {
     _recorder = TelemetryRecorder(state, journal: _journal);
     // USB bindings keep their recorder reference; reset its capture state instead.
     _usbService.stop();
-    _usbService = UsbService(
-      state,
-      _recorder,
-      _gpsSourceManager,
-      canTxService: _canTxService,
-      canIngestRepository: canIngestRepository,
-    );
-    state.attachUsbDebugLogStore(_usbService.debugLog);
-    state.onUsbTx = _usbService.sendString;
-    state.onRequestUsbPortOptions = _usbService.listPortOptions;
-    state.onUsbPortSelectionChanged = _usbService.applyPortSelection;
-    state.onUsbBaudRateChanged = _usbService.applyBaudRate;
-    state.onSimulationToggleChanged = _usbService.setSimulationEnabled;
+    _wireLinkService();
     await _recorder.start();
     await _mqttService.start();
     _usbService.start();

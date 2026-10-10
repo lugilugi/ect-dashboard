@@ -534,10 +534,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             : (state.isConnected ? p.green : p.red);
         final sourceIcon = state.isSimulated
             ? Icons.memory
+            : state.linkIsBle
+            ? (state.isConnected
+                  ? Icons.bluetooth_connected_rounded
+                  : Icons.bluetooth_disabled_rounded)
             : (state.isConnected ? Icons.usb_rounded : Icons.usb_off_rounded);
         final sourceLabel = state.isSimulated
             ? 'SIM'
-            : (state.isConnected ? 'USB' : 'OFF');
+            : (state.isConnected ? state.linkMode.label : 'OFF');
         final sourceText = isCompact ? sourceLabel : 'SRC:$sourceLabel';
         final gpsSourceIcon = state.usingPhoneGpsFallback
             ? Icons.phone_android_rounded

@@ -11,6 +11,7 @@ import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/core/theme/palette.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_dictionary.dart';
 import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
+import 'package:telemetry_dashboard/services/ingest/ble_nus_transport.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 import 'package:telemetry_dashboard/ui/widgets/common/map_markers.dart';
@@ -51,6 +52,11 @@ class ConfigViewState extends ConsumerState<ConfigView>
   List<UsbPortOption> _usbPortOptions = const [];
   bool _usbPortsLoading = false;
   bool _usbPortsLoaded = false;
+  LinkMode? _portOptionsMode;
+  BleBondState _bleBondState = BleBondState.unknown;
+  String? _bleBondFor;
+  bool _bleBondLoading = false;
+  bool _blePairBusy = false;
   TextEditingController? _mqttHostController;
   TextEditingController? _mqttPortController;
 
@@ -245,7 +251,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                   ),
                 ),
                 _infoRow(
-                  'USB',
+                  'LINK (${state.linkMode.label})',
                   state.isConnected ? 'CONNECTED' : 'DISCONNECTED',
                   valueColor: state.isConnected
                       ? p.green
@@ -282,6 +288,12 @@ class ConfigViewState extends ConsumerState<ConfigView>
   }
 
   Widget _buildUsbSelectCard() {
+    if (_portOptionsMode != state.linkMode) {
+      // Options belong to one transport; reload after a mode switch.
+      _portOptionsMode = state.linkMode;
+      _usbPortOptions = const [];
+      _usbPortsLoaded = false;
+    }
     if (!_usbPortsLoaded && !_usbPortsLoading) {
       _refreshUsbPortOptions();
     }
@@ -293,6 +305,8 @@ class ConfigViewState extends ConsumerState<ConfigView>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (state.bleLinkSupported) ..._buildLinkModeSelector(),
+          if (state.linkIsBle) ..._buildBleDeviceControls() else ...[
           Row(
             children: [
               Expanded(
@@ -415,9 +429,234 @@ class ConfigViewState extends ConsumerState<ConfigView>
             '(115200 typical); native ESP32 CDC ignores it.',
             style: TextStyle(color: p.dimText, fontSize: 10),
           ),
+          ],
         ],
       ),
     );
+  }
+
+  List<Widget> _buildLinkModeSelector() {
+    return [
+      Text(
+        'VEHICLE LINK',
+        style: TextStyle(
+          color: p.cyan,
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          fontFamily: 'monospace',
+        ),
+      ),
+      const SizedBox(height: 4),
+      SegmentedButton<LinkMode>(
+        segments: const [
+          ButtonSegment(
+            value: LinkMode.usb,
+            label: Text('USB'),
+            icon: Icon(Icons.usb_rounded, size: 16),
+          ),
+          ButtonSegment(
+            value: LinkMode.ble,
+            label: Text('BLE'),
+            icon: Icon(Icons.bluetooth_rounded, size: 16),
+          ),
+        ],
+        selected: {state.linkMode},
+        showSelectedIcon: false,
+        onSelectionChanged: (selection) {
+          state.updateLinkMode(selection.first);
+        },
+      ),
+      const SizedBox(height: 12),
+    ];
+  }
+
+  List<Widget> _buildBleDeviceControls() {
+    final selected = state.bleDeviceSelection;
+    final selectedInList = _usbPortOptions.any((o) => o.id == selected);
+    if (_bleBondFor != selected && !_bleBondLoading) {
+      _refreshBleBondState();
+    }
+    final bonded = _bleBondState == BleBondState.bonded;
+
+    return [
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              'BLE DEVICE',
+              style: TextStyle(
+                color: p.cyan,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+          IconButton(
+            icon: _usbPortsLoading
+                ? SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: p.cyan,
+                    ),
+                  )
+                : Icon(Icons.bluetooth_searching, color: p.dimText, size: 18),
+            tooltip: 'Scan for ESP32',
+            visualDensity: VisualDensity.compact,
+            onPressed: _usbPortsLoading ? null : _refreshUsbPortOptions,
+          ),
+        ],
+      ),
+      const SizedBox(height: 4),
+      DropdownButtonFormField<String>(
+        initialValue: selectedInList ? selected : null,
+        isExpanded: true,
+        dropdownColor: p.light ? Colors.white : const Color(0xFF181818),
+        style: TextStyle(color: p.mainText, fontSize: 12),
+        decoration: InputDecoration(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 8,
+          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+          isDense: true,
+        ),
+        items: [
+          const DropdownMenuItem<String>(value: null, child: Text('NONE')),
+          for (final option in _usbPortOptions)
+            DropdownMenuItem<String>(
+              value: option.id,
+              child: Text(option.label),
+            ),
+        ],
+        onChanged: (value) {
+          if (value == null && selected.isEmpty) {
+            return;
+          }
+          state.updateBleDeviceSelection(value ?? '');
+        },
+      ),
+      const SizedBox(height: 8),
+      _infoRow(
+        'PAIRING',
+        selected.isEmpty
+            ? 'NO DEVICE'
+            : _bleBondLoading
+            ? '...'
+            : _bleBondState.name.toUpperCase(),
+        valueColor: bonded ? p.green : p.amber,
+      ),
+      const SizedBox(height: 6),
+      Row(
+        children: [
+          Expanded(
+            child: _buildCmdBtn(
+              _blePairBusy ? 'PAIRING...' : 'PAIR',
+              selected.isEmpty || bonded || _blePairBusy
+                  ? () {}
+                  : _pairSelectedBle,
+              compact: true,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildCmdBtn(
+              'UNPAIR',
+              selected.isEmpty || !bonded || _blePairBusy
+                  ? () {}
+                  : _unpairSelectedBle,
+              compact: true,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 6),
+      Text(
+        'Scan, select the ESP32 (Nordic UART), then PAIR and enter its '
+        'passkey once. The link reconnects automatically while paired.',
+        style: TextStyle(color: p.dimText, fontSize: 10),
+      ),
+    ];
+  }
+
+  Future<void> _refreshBleBondState() async {
+    final fetcher = state.onRequestBleBondState;
+    final deviceId = state.bleDeviceSelection;
+    _bleBondFor = deviceId;
+    if (fetcher == null || deviceId.isEmpty) {
+      _bleBondState = BleBondState.unknown;
+      return;
+    }
+    _bleBondLoading = true;
+    final bond = await fetcher(deviceId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _bleBondLoading = false;
+      if (_bleBondFor == deviceId) {
+        _bleBondState = bond;
+      }
+    });
+  }
+
+  Future<void> _pairSelectedBle() async {
+    final pair = state.onRequestBlePair;
+    final deviceId = state.bleDeviceSelection;
+    if (pair == null || deviceId.isEmpty) {
+      return;
+    }
+    setState(() => _blePairBusy = true);
+    final result = await pair(deviceId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _blePairBusy = false;
+      _bleBondFor = null;
+    });
+    if (result != BlePairResult.bonded) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(switch (result) {
+            BlePairResult.permissionDenied =>
+              'Bluetooth permission denied; allow Nearby devices in settings.',
+            BlePairResult.timeout => 'Pairing timed out. Scan and try again.',
+            BlePairResult.unsupported => 'BLE pairing is Android-only.',
+            _ => 'Pairing failed. Check the passkey and that the ESP32 is on.',
+          }),
+        ),
+      );
+    }
+  }
+
+  Future<void> _unpairSelectedBle() async {
+    final unpair = state.onRequestBleUnpair;
+    final deviceId = state.bleDeviceSelection;
+    if (unpair == null || deviceId.isEmpty) {
+      return;
+    }
+    setState(() => _blePairBusy = true);
+    final removed = await unpair(deviceId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _blePairBusy = false;
+      _bleBondFor = null;
+    });
+    if (!removed) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not remove the bond; forget the device in Android '
+            'Bluetooth settings.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _refreshUsbPortOptions() async {
@@ -425,10 +664,11 @@ class ConfigViewState extends ConsumerState<ConfigView>
     if (fetcher == null) {
       return;
     }
+    final mode = state.linkMode;
     _usbPortsLoading = true;
     try {
       final options = await fetcher();
-      if (mounted) {
+      if (mounted && mode == state.linkMode) {
         setState(() {
           _usbPortOptions = options;
           _usbPortsLoaded = true;
@@ -541,7 +781,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
             children: [
               Expanded(
                 child: Text(
-                  'USB DEBUG LOG (${entries.length})',
+                  'LINK DEBUG LOG (${entries.length})',
                   style: TextStyle(
                     color: p.cyan,
                     fontSize: 11,

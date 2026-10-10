@@ -8,6 +8,8 @@ import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
 import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
 import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
+import 'package:telemetry_dashboard/services/ingest/ble_nus_transport.dart';
+import 'package:telemetry_dashboard/services/ingest/ingest_transport.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_service.dart';
 import 'package:telemetry_dashboard/services/orchestration/session_orchestrator.dart';
 import 'package:telemetry_dashboard/services/persistence/spool_health_store.dart';
@@ -605,6 +607,44 @@ class DashboardState extends ChangeNotifier {
     _usbBaudRate = bounded;
     notifyListeners();
     onUsbBaudRateChanged?.call(bounded);
+  }
+
+  // Vehicle link transport, chosen by the user in Config -> Connectivity.
+  // BLE is Android-only; elsewhere a stored BLE choice falls back to USB.
+  LinkMode _linkMode = LinkMode.usb;
+  LinkMode get linkMode => _linkMode;
+  bool get linkIsBle => _linkMode == LinkMode.ble;
+
+  void Function(LinkMode mode)? onLinkModeChanged;
+
+  void updateLinkMode(LinkMode value) {
+    final resolved = value == LinkMode.ble && !bleLinkSupported
+        ? LinkMode.usb
+        : value;
+    if (_linkMode == resolved) return;
+    _linkMode = resolved;
+    notifyListeners();
+    onLinkModeChanged?.call(resolved);
+  }
+
+  /// Overridable for tests; true on Android.
+  bool bleLinkSupported = BleNusTransport.isSupportedPlatform;
+
+  // User-pinned BLE peripheral (Android remote MAC; empty = none). Kept
+  // apart from the USB pin so switching modes keeps both.
+  String _bleDeviceSelection = "";
+  String get bleDeviceSelection => _bleDeviceSelection;
+
+  void Function(String deviceId)? onBleDeviceSelectionChanged;
+  Future<BlePairResult> Function(String deviceId)? onRequestBlePair;
+  Future<bool> Function(String deviceId)? onRequestBleUnpair;
+  Future<BleBondState> Function(String deviceId)? onRequestBleBondState;
+
+  void updateBleDeviceSelection(String value) {
+    if (_bleDeviceSelection == value) return;
+    _bleDeviceSelection = value;
+    notifyListeners();
+    onBleDeviceSelectionChanged?.call(value);
   }
 
   // GENERATE NAME (e.g., RUN_20260327_1430)

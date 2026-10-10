@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0-rc.4 — 10 October 2026
+
+- Added Bluetooth LE as a selectable vehicle link on Android (Config ->
+  Connectivity -> VEHICLE LINK: USB | BLE). The ESP32-C3 uses the Nordic UART
+  service with passkey pairing; the link reconnects on its own while paired.
+- USB on Android and desktop serial are unchanged and remain the default.
+  Telemetry, commands, server and schema are unchanged.
+- The ESP32 firmware must implement docs/implementation/ble-link.md before BLE
+  mode can be used. BLE hardware qualification is pending.
+
 ## 3.0.0-rc.3 — 7 October 2026
 
 - Replaced the CARTO tiles requiring API keys with OpenStreetMap in both Driver

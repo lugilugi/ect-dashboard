@@ -51,6 +51,7 @@ dependencies:
   path_provider: ^2.1.5
   url_launcher: ^6.3.2
   latlong2: ^0.9.1
+  flutter_reactive_ble: ^5.5.0
 
 dev_dependencies:
   flutter_test:

@@ -5,12 +5,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
+import 'package:telemetry_dashboard/services/ingest/ingest_transport.dart';
 
 class AppPreferencesService {
   static const String _kMqttHost = 'prefs.mqtt_host';
   static const String _kMqttPort = 'prefs.mqtt_port';
   static const String _kUsbPortSelection = 'prefs.usb_port_selection';
   static const String _kUsbBaudRate = 'prefs.usb_baud_rate';
+  static const String _kLinkMode = 'prefs.link_mode';
+  static const String _kBleDeviceSelection = 'prefs.ble_device_selection';
   static const String _kUseLightTheme = 'prefs.use_light_theme';
   static const String _kUseDictionaryAuxDispatch =
       'prefs.use_dictionary_aux_dispatch';
@@ -42,6 +45,8 @@ class AppPreferencesService {
       state.mqttPort,
       state.usbPortSelection,
       state.usbBaudRate,
+      state.linkMode.name,
+      state.bleDeviceSelection,
       state.useLightTheme,
       state.useDictionaryAuxDispatch,
       state.crossingDeadzoneMs,
@@ -83,6 +88,14 @@ class AppPreferencesService {
     if (usbBaudRate != null && usbBaudRate > 0) {
       state.updateUsbBaudRate(usbBaudRate);
     }
+
+    final bleDeviceSelection = prefs.getString(_kBleDeviceSelection);
+    if (bleDeviceSelection != null && bleDeviceSelection.isNotEmpty) {
+      state.updateBleDeviceSelection(bleDeviceSelection);
+    }
+
+    // Falls back to USB where BLE is unsupported (non-Android).
+    state.updateLinkMode(LinkMode.fromWire(prefs.getString(_kLinkMode)));
 
     final useLightTheme = prefs.getBool(_kUseLightTheme);
     if (useLightTheme != null) {
@@ -198,6 +211,8 @@ class AppPreferencesService {
     await prefs.setInt(_kMqttPort, state.mqttPort);
     await prefs.setString(_kUsbPortSelection, state.usbPortSelection);
     await prefs.setInt(_kUsbBaudRate, state.usbBaudRate);
+    await prefs.setString(_kLinkMode, state.linkMode.name);
+    await prefs.setString(_kBleDeviceSelection, state.bleDeviceSelection);
     await prefs.setBool(_kUseLightTheme, state.useLightTheme);
     await prefs.setBool(
       _kUseDictionaryAuxDispatch,
