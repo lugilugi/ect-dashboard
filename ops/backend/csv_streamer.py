@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent at-least-once v2 MQTT archive; durable flush once per second."""
+"""Independent at-least-once v2 MQTT archive; acks follow a durable flush (once per second)."""
 
 import csv
 from collections import OrderedDict
@@ -68,12 +68,50 @@ class CsvSink:
             self._handles.clear()
 
 
+class AckTracker:
+    """Defer MQTT acks until the rows they produced are fsynced.
+
+    Ack ids only mean something on the connection that delivered them, so a
+    new connection drops anything still pending (the broker redelivers it).
+    """
+
+    def __init__(self, sink):
+        self.sink = sink
+        self.lock = threading.Lock()
+        self._pending = []
+
+    def new_connection(self):
+        with self.lock:
+            self._pending.clear()
+
+    def add(self, mid, qos):
+        if qos > 0:
+            self._pending.append((mid, qos))
+
+    def flush_and_ack(self, client):
+        with self.lock:
+            batch, self._pending = self._pending, []
+            self.sink.flush_all()
+            for mid, qos in batch:
+                client.ack(mid, qos)
+
+
 def on_connect(client, userdata, flags, rc, properties=None):
+    userdata["acks"].new_connection()
     client.subscribe([(TOPIC_EVENTS, 1), (TOPIC_SESSIONS, 1)])
 
 
 def on_message(client, userdata, msg):
-    sink = userdata["sink"]
+    acks = userdata.get("acks")
+    if acks is None:  # no ack tracking (direct callers)
+        _handle_message(userdata["sink"], msg)
+        return
+    with acks.lock:
+        _handle_message(userdata["sink"], msg)
+        acks.add(msg.mid, msg.qos)
+
+
+def _handle_message(sink, msg):
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
         if not isinstance(payload, dict) or payload.get("schema_version") != 2:
@@ -103,10 +141,11 @@ def main():
 
     sink = CsvSink(EXPORT_DIR)
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=os.environ.get("CSV_CLIENT_ID", "ect-csv-v2"),
-                         clean_session=False)
+                         clean_session=False, manual_ack=True)
     client.on_connect = on_connect
     client.on_message = on_message
-    client.user_data_set({"sink": sink})
+    acks = AckTracker(sink)
+    client.user_data_set({"sink": sink, "acks": acks})
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
@@ -114,8 +153,12 @@ def main():
     client.loop_start()
     try:
         while not stop.wait(1):
-            sink.flush_all()
+            acks.flush_and_ack(client)
     finally:
+        try:
+            acks.flush_and_ack(client)
+        except Exception:
+            pass
         client.disconnect()
         client.loop_stop()
         sink.close()

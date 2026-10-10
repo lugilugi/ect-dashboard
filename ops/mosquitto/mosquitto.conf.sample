@@ -3,7 +3,10 @@
 
 persistence true
 persistence_location /var/lib/mosquitto/
+# Persistence rewrite interval (s). A broker crash can lose up to this window;
+# covered by the phone's 7-day history and the reconcile tool.
 autosave_interval 30
+sys_interval 10
 
 log_dest file /var/log/mosquitto/mosquitto.log
 log_type error
@@ -18,9 +21,11 @@ password_file /etc/mosquitto/passwd
 acl_file /etc/mosquitto/acl
 
 # Keep queueing robust under temporary disconnects.
-max_inflight_messages 1000
-max_queued_messages 20000
-max_queued_bytes 0
+# Byte budget per persistent-session client (~2 h at 400 records/s x ~450 B);
+# the message cap is only a backstop for envelopes of >= ~1 KiB.
+max_inflight_messages 20
+max_queued_bytes 1500000000
+max_queued_messages 1500000
 
 # Optional TLS listener (uncomment and configure certificate paths).
 # listener 8883 0.0.0.0
