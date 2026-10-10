@@ -1,22 +1,21 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter/services.dart';
 import 'package:telemetry_dashboard/services/orchestration/telemetry_recorder.dart';
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
 import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
 import 'package:telemetry_dashboard/services/ingest/usb_debug_log.dart';
 import 'package:telemetry_dashboard/repositories/can_ingest_repository.dart';
+import 'package:usb_serial/transaction.dart';
+import 'package:usb_serial/usb_serial.dart';
+import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_bindings.dart';
 import 'package:telemetry_dashboard/models/telemetry/can_decoder.dart';
 
-/// A selectable ingest endpoint. For BLE: id = remoteId (MAC on Android,
-/// UUID on iOS), label = "<name> (<id>) <rssi>".
-///
-/// NOTE: the class/file name still says "Usb" on purpose so the coordinator,
-/// DashboardState and Config view keep compiling unchanged. Rename once the
-/// BLE link is verified on the car.
+/// A selectable USB ingest endpoint: Android usb_serial device (id =
+/// deviceName) or desktop serial port name (id = port name like COM5).
 class UsbPortOption {
   final String id;
   final String label;
@@ -24,56 +23,55 @@ class UsbPortOption {
   const UsbPortOption({required this.id, required this.label});
 }
 
-/// ESP32 -> phone ingest over BLE using the Nordic UART Service (NUS).
-///
-/// Flow: scan -> pick the ESP32 that is advertising (NUS UUID or
-/// [deviceNamePrefix]) -> connect -> negotiate MTU -> discover NUS ->
-/// subscribe to the TX characteristic (notify) -> feed every notification
-/// into the same line-framed candump pipeline the USB path used. If the link
-/// drops, the 3 s reconnect timer scans again, so ingest resumes by itself.
 class UsbService {
   final DashboardState state;
   final UsbDebugLogStore debugLog = UsbDebugLogStore();
-
-  // Nordic UART Service. "TX/RX" are named from the ESP32's point of view.
-  static final Guid nusServiceGuid = Guid(
-    '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
-  );
-  static final Guid nusRxGuid = Guid(
-    '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
-  ); // phone -> ESP32 (write)
-  static final Guid nusTxGuid = Guid(
-    '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
-  ); // ESP32 -> phone (notify)
-
-  /// Advertised-name prefix used when the NUS UUID is not in the advertising
-  /// packet. Override with --dart-define=BLE_NAME_PREFIX=MyCar
-  static const String deviceNamePrefix = String.fromEnvironment(
-    'BLE_NAME_PREFIX',
-    defaultValue: 'EcoArchers',
-  );
-
-  static const int desiredMtu = 247;
-  static const Duration scanTimeout = Duration(seconds: 8);
-  static const Duration connectTimeout = Duration(seconds: 12);
-
-  BluetoothDevice? _device;
-  BluetoothCharacteristic? _rxChar; // phone -> ESP32
-  StreamSubscription<List<int>>? _notifySub;
-  StreamSubscription<BluetoothConnectionState>? _connSub;
+  UsbPort? _port;
+  StreamSubscription<Uint8List>? _subscription;
   StreamSubscription<CanFrameMessage>? _canFrameSubscription;
   StreamSubscription<CanParseError>? _canParseErrorSubscription;
+  Transaction<Uint8List>? _transaction;
   Timer? _reconnectTimer;
   Timer? _mockTimer;
   Timer? _statsTimer;
-  bool _connecting = false;
+  bool _usbPluginUnavailable = false;
+  bool _reportedUsbPluginUnavailable = false;
   bool _ingestRepositoryAttached = false;
-  Future<void> _txChain = Future<void>.value();
+
+  // Desktop serial (Windows/macOS/Linux) fallback when usb_serial is
+  // unavailable. Configured with --dart-define=DESKTOP_SERIAL_PORT=COM5 to
+  // pin a specific port; without it the first usable port is auto-detected
+  // (native USB CDC on /dev/ttyACM* is preferred, then /dev/ttyUSB*
+  // bridges, then anything else). Baud is informational for ESP32-C3
+  // CDC-ACM (USB Serial/JTAG) but matters for classic UART bridges like
+  // the CP2102/CH340 found on ESP32 WROOM dev boards.
+  static const String defaultDesktopSerialPort = String.fromEnvironment(
+    'DESKTOP_SERIAL_PORT',
+    defaultValue: 'COM3',
+  );
+  static const bool hasExplicitDesktopSerialPort = bool.hasEnvironment(
+    'DESKTOP_SERIAL_PORT',
+  );
+
+  SerialPort? _desktopPort;
+  StreamSubscription<Uint8List>? _desktopSubscription;
 
   static const int maxLineBufferBytes = 64 * 1024;
   static const int maxLineBytes = 8 * 1024;
   String _lineBuffer = "";
   final RegExp _candumpRegex = RegExp(r'can0\s+([0-9a-fA-F]+)#([0-9a-fA-F]*)');
+
+  // ESP32 over USB arrives either as native Espressif CDC (ESP32-C3/S3 USB
+  // Serial/JTAG, VID 0x303A) or through the USB-UART bridge chip soldered
+  // onto classic ESP32 WROOM dev boards: Silicon Labs CP210x (0x10C4),
+  // WCH CH340/CH341 (0x1A86), FTDI FT232 (0x0403). Vendor match keeps
+  // auto-detection robust without knowing every bridge PID.
+  static const Set<int> _preferredVendorIds = {
+    0x303A, // Espressif native USB
+    0x10C4, // Silicon Labs CP210x
+    0x1A86, // WCH CH340/CH341
+    0x0403, // FTDI FT232
+  };
 
   // RX accounting for the periodic stats log entry.
   int _rxBytesTotal = 0;
@@ -122,42 +120,18 @@ class UsbService {
     CanBindings? bindings,
   }) : canBindings = bindings ?? CanBindings(state, recorder, gpsSourceManager);
 
-  bool get _hasLink => _device != null;
-
-  // ---------------------------------------------------------------- TX ----
-
-  /// Phone -> ESP32 (e.g. CAN TX requests). Chunked to the negotiated MTU and
-  /// serialized so chunks cannot interleave.
   void sendString(String data) {
     final bytes = Uint8List.fromList(data.codeUnits);
-    final rx = _rxChar;
-    final device = _device;
-    if (rx != null && device != null) {
+    if (_port != null) {
+      _port!.write(bytes);
       debugLog.info('TX ${bytes.length} B: ${_trimForLog(data)}');
-      _txChain = _txChain
-          .then((_) => _writeChunks(device, rx, bytes))
-          .catchError((Object e) {
-            _logThrottled('ble_tx_error', 'BLE TX failed: $e');
-          });
+    } else if (_desktopPort != null) {
+      _desktopPort!.write(bytes);
+      debugLog.info('TX ${bytes.length} B: ${_trimForLog(data)}');
     } else if (state.isSimulated) {
       debugPrint("SIMULATED TX: $data");
     }
   }
-
-  Future<void> _writeChunks(
-    BluetoothDevice device,
-    BluetoothCharacteristic rx,
-    Uint8List bytes,
-  ) async {
-    final chunk = max(20, device.mtuNow - 3);
-    final noRsp = rx.properties.writeWithoutResponse;
-    for (var i = 0; i < bytes.length; i += chunk) {
-      final end = min(i + chunk, bytes.length);
-      await rx.write(bytes.sublist(i, end), withoutResponse: noRsp);
-    }
-  }
-
-  // --------------------------------------------------------- lifecycle ----
 
   void _stopMockSimulation() {
     if (_mockTimer == null && !state.isSimulated) {
@@ -171,29 +145,32 @@ class UsbService {
 
   void setSimulationEnabled(bool enabled) {
     if (enabled) {
-      unawaited(_teardownLink());
+      _subscription?.cancel();
+      _subscription = null;
+      _port?.close();
+      _port = null;
       state.setConnectionState(false);
-      debugLog.info('Simulation mode enabled (BLE ingest paused)');
+      debugLog.info('Simulation mode enabled (USB ingest paused)');
       _startMockSimulation();
       return;
     }
 
     _stopMockSimulation();
-    if (!_hasLink) {
+    if (_port == null && _desktopPort == null) {
       unawaited(_connect());
     }
   }
 
   void start() {
-    debugLog.info('BLE ingest started');
+    debugLog.info('USB ingest started');
     if (canIngestRepository != null) {
       unawaited(_startIngestRepositoryBridge());
     }
 
-    unawaited(_connect());
+    _connect();
     _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!_hasLink && !_connecting && _mockTimer == null) {
-        unawaited(_connect());
+      if (_port == null && _desktopPort == null && _mockTimer == null) {
+        _connect();
       }
     });
     _statsTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -205,18 +182,23 @@ class UsbService {
     _reconnectTimer?.cancel();
     _mockTimer?.cancel();
     _statsTimer?.cancel();
+    _subscription?.cancel();
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
     _canFrameSubscription?.cancel();
     _canFrameSubscription = null;
     _canParseErrorSubscription?.cancel();
     _canParseErrorSubscription = null;
     _ingestRepositoryAttached = false;
-    unawaited(_teardownLink());
+    _transaction?.dispose();
+    _port?.close();
+    _port = null;
+    _desktopPort?.close();
+    _desktopPort = null;
     state.setSimulatedState(false);
     state.setConnectionState(false);
-    debugLog.info('BLE ingest stopped');
+    debugLog.info('USB ingest stopped');
   }
-
-  // ------------------------------------------------------- connection ----
 
   Future<void> _connect() async {
     if (state.enableSimulation) {
@@ -224,294 +206,351 @@ class UsbService {
       state.setConnectionState(false);
       return;
     }
-    if (_connecting || _hasLink) {
-      return;
-    }
 
-    _connecting = true;
+    List<UsbDevice> devices = [];
     try {
-      if (!await _ensureAdapterReady()) {
+      devices = await UsbSerial.listDevices();
+    } catch (e) {
+      if (e is MissingPluginException) {
+        // usb_serial is Android-only; fall back to the desktop serial port
+        // (Windows/macOS/Linux) so the laptop can ingest from the ESP32 too.
+        _usbPluginUnavailable = true;
+        if (!_reportedUsbPluginUnavailable) {
+          debugLog.warn(
+            'usb_serial plugin unavailable; using desktop serial fallback.',
+          );
+          _reportedUsbPluginUnavailable = true;
+        }
+        await _connectDesktopSerial();
         return;
       }
 
-      final target = await _scanForEsp();
-      if (target == null) {
+      _logThrottled('usb_list_error', 'USB device list error: $e');
+      return;
+    }
+
+    if (devices.isEmpty) {
+      if (_usbPluginUnavailable) {
+        await _connectDesktopSerial();
+      } else if (state.enableSimulation) {
+        _startMockSimulation();
+      } else {
+        _stopMockSimulation();
+        _logThrottled('no_usb_devices', 'No USB devices found; retrying...');
+      }
+      return;
+    }
+
+    _stopMockSimulation();
+
+    try {
+      // Prefer the user-selected device, then an Espressif device or a
+      // WROOM USB-UART bridge (CP210x, CH340, FT232); fall back to the
+      // first device otherwise.
+      final selectedName = state.usbPortSelection;
+      UsbDevice espDevice;
+      if (selectedName.isNotEmpty) {
+        espDevice = devices.firstWhere(
+          (d) => d.deviceName == selectedName,
+          orElse: () => devices.first,
+        );
+        if (espDevice.deviceName != selectedName) {
+          _logThrottled(
+            'usb_selected_missing',
+            'Selected USB port $selectedName not found; '
+                'falling back to ${_describeUsbDevice(espDevice)}',
+          );
+        }
+      } else {
+        espDevice = devices.firstWhere(
+          (d) => _preferredVendorIds.contains(d.vid),
+          orElse: () => devices.first,
+        );
+      }
+      debugLog.info('Found USB device: ${_describeUsbDevice(espDevice)}');
+      _port = await espDevice.create();
+
+      if (_port == null) return;
+
+      bool openResult = await _port!.open();
+      if (!openResult) {
         _logThrottled(
-          'ble_no_device',
-          'No ESP32 advertising (NUS or "$deviceNamePrefix*"); retrying...',
+          'usb_open_failed',
+          'Failed to open USB device '
+              '${espDevice.vid?.toRadixString(16)}:${espDevice.pid?.toRadixString(16)}',
         );
+        _port = null;
         return;
       }
 
-      _stopMockSimulation();
-      await _openDevice(target);
+      await _port!.setDTR(true);
+      await _port!.setRTS(true);
+      // For CDC-ACM (ESP32-C3 USB Serial/JTAG), baud rate is
+      // informational only — data moves at USB speed. Classic UART
+      // bridges (CP210x/CH340/FTDI) need firmware-matching baud, set in
+      // Config -> Connectivity (persisted).
+      await _port!.setPortParameters(
+        state.usbBaudRate,
+        UsbPort.DATABITS_8,
+        UsbPort.STOPBITS_1,
+        UsbPort.PARITY_NONE,
+      );
+
+      state.setConnectionState(true);
+      debugLog.info(
+        'USB port open: ${espDevice.deviceName} '
+        '(${espDevice.vid?.toRadixString(16)}:${espDevice.pid?.toRadixString(16)} '
+        '${espDevice.productName ?? ''})',
+      );
+
+      _subscription = _port!.inputStream?.listen(
+        (Uint8List event) {
+          _processBytes(event);
+        },
+        onDone: () {
+          _handleDisconnect();
+        },
+        onError: (e) {
+          _handleDisconnect();
+        },
+      );
     } catch (e) {
-      _logThrottled('ble_connect_error', 'BLE connect failed: $e');
-      await _teardownLink();
+      // e.g. the user denied the USB permission dialog — retry later via
+      // the reconnect timer instead of surfacing an unhandled error.
+      _logThrottled('usb_open_error', 'USB open failed: $e');
+      await _port?.close();
+      _port = null;
       state.setConnectionState(false);
-    } finally {
-      _connecting = false;
     }
   }
 
-  Future<bool> _ensureAdapterReady() async {
-    if (!await FlutterBluePlus.isSupported) {
-      _logThrottled('ble_unsupported', 'Bluetooth LE not supported on device.');
-      return false;
-    }
-
-    var adapter = FlutterBluePlus.adapterStateNow;
-    if (adapter == BluetoothAdapterState.unknown) {
-      adapter = await FlutterBluePlus.adapterState
-          .firstWhere((s) => s != BluetoothAdapterState.unknown)
-          .timeout(
-            const Duration(seconds: 3),
-            onTimeout: () => BluetoothAdapterState.unknown,
-          );
-    }
-    if (adapter == BluetoothAdapterState.on) {
-      return true;
-    }
-
-    _logThrottled('ble_adapter_off', 'Bluetooth is $adapter; enable it.');
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        await FlutterBluePlus.turnOn(); // system prompt; throws if denied
-      } catch (_) {}
-    }
-    return false; // the next reconnect tick retries
+  String _describeUsbDevice(UsbDevice device) {
+    final vid = device.vid?.toRadixString(16).padLeft(4, '0') ?? '????';
+    final pid = device.pid?.toRadixString(16).padLeft(4, '0') ?? '????';
+    final name = device.productName ?? device.deviceName;
+    return '$name (VID $vid PID $pid)';
   }
 
-  bool _isEspCandidate(ScanResult r) {
-    final adv = r.advertisementData;
-    if (adv.serviceUuids.contains(nusServiceGuid)) {
-      return true;
-    }
-    final name = adv.advName.isNotEmpty ? adv.advName : r.device.platformName;
-    return name.isNotEmpty && name.startsWith(deviceNamePrefix);
-  }
-
-  String _describeScan(ScanResult r) {
-    final adv = r.advertisementData;
-    final name = adv.advName.isNotEmpty
-        ? adv.advName
-        : (r.device.platformName.isNotEmpty ? r.device.platformName : '?');
-    return '$name (${r.device.remoteId.str}) ${r.rssi} dBm';
-  }
-
-  /// Scans until an ESP32 is seen advertising. If a device is pinned in
-  /// Config, only that remoteId matches; otherwise the strongest candidate
-  /// seen within a short settle window wins.
-  Future<ScanResult?> _scanForEsp() async {
-    final pinned = state.usbPortSelection;
-    ScanResult? best;
-    final firstHit = Completer<void>();
-
-    final sub = FlutterBluePlus.onScanResults.listen((results) {
-      for (final r in results) {
-        if (!_isEspCandidate(r)) {
-          continue;
-        }
-        if (pinned.isNotEmpty && r.device.remoteId.str != pinned) {
-          continue;
-        }
-        if (best == null || r.rssi > best!.rssi) {
-          best = r;
-        }
-        if (!firstHit.isCompleted) {
-          firstHit.complete();
-        }
-      }
-    }, onError: (Object e) => debugLog.warn('BLE scan stream error: $e'));
-
-    try {
-      await FlutterBluePlus.startScan(
-        timeout: scanTimeout,
-        androidScanMode: AndroidScanMode.lowLatency,
-      );
-      await Future.any<void>([
-        firstHit.future,
-        Future<void>.delayed(scanTimeout),
-      ]);
-      if (best != null && pinned.isEmpty) {
-        // Settle briefly so a stronger nearby ESP32 can win over the first.
-        await Future<void>.delayed(const Duration(milliseconds: 600));
-      }
-    } finally {
-      await sub.cancel();
-      try {
-        await FlutterBluePlus.stopScan();
-      } catch (_) {}
-    }
-    return best;
-  }
-
-  Future<void> _openDevice(ScanResult found) async {
-    final device = found.device;
-    debugLog.info('Found ESP32: ${_describeScan(found)}; connecting...');
-
-    await device.connect(timeout: connectTimeout, mtu: desiredMtu);
-    _device = device;
-
-    // Subscribe only after connect(): connectionState replays the current
-    // (disconnected) value on listen and would trigger a false disconnect.
-    _connSub = device.connectionState.listen((s) {
-      if (s == BluetoothConnectionState.disconnected) {
-        _handleDisconnect();
-      }
-    });
-
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        await device.requestConnectionPriority(
-          connectionPriorityRequest: ConnectionPriority.high,
-        );
-      } catch (_) {}
-    }
-
-    final services = await device.discoverServices();
-    BluetoothCharacteristic? tx;
-    BluetoothCharacteristic? rx;
-    for (final s in services) {
-      if (s.uuid != nusServiceGuid) {
-        continue;
-      }
-      for (final c in s.characteristics) {
-        if (c.uuid == nusTxGuid) tx = c;
-        if (c.uuid == nusRxGuid) rx = c;
-      }
-    }
-    if (tx == null) {
-      throw StateError('Nordic UART TX characteristic not found on device');
-    }
-
-    _rxChar = rx;
-    _lineBuffer = '';
-
-    // Listen first, then enable notifications, so the first packet is kept.
-    _notifySub = tx.onValueReceived.listen(
-      _onNotification,
-      onError: (Object e) {
-        debugLog.error('BLE notify stream error: $e');
-        _handleDisconnect();
-      },
-    );
-    await tx.setNotifyValue(true);
-
-    state.setConnectionState(true);
-    debugLog.info(
-      'BLE link up: ${_describeScan(found)} '
-      'MTU ${device.mtuNow} (payload ${device.mtuNow - 3} B)',
-    );
-  }
-
-  void _onNotification(List<int> data) {
-    if (data.isEmpty) {
-      return;
-    }
-    _processBytes(data is Uint8List ? data : Uint8List.fromList(data));
-  }
-
-  void _handleDisconnect() {
-    if (!_hasLink) {
-      return;
-    }
-    unawaited(_teardownLink());
-    state.setSimulatedState(false);
-    state.setConnectionState(false);
-    debugLog.warn('BLE device disconnected; will rescan');
-  }
-
-  Future<void> _teardownLink() async {
-    final device = _device;
-    _device = null;
-    _rxChar = null;
-    _lineBuffer = '';
-
-    await _connSub?.cancel();
-    _connSub = null;
-    await _notifySub?.cancel();
-    _notifySub = null;
-
-    if (device != null) {
-      try {
-        await device.disconnect();
-      } catch (_) {}
-    }
-  }
-
-  /// Enumerates ESP32s currently advertising (4 s scan) so the Config screen
-  /// can pin one. The connected device is always listed.
+  /// Enumerates selectable USB endpoints for the current platform:
+  /// Android usb_serial devices (or desktop serial ports when the plugin is
+  /// unavailable), desktop ports otherwise.
   Future<List<UsbPortOption>> listPortOptions() async {
-    final found = <String, UsbPortOption>{};
-
-    final device = _device;
-    if (device != null) {
-      found[device.remoteId.str] = UsbPortOption(
-        id: device.remoteId.str,
-        label:
-            '${device.platformName.isEmpty ? 'ESP32' : device.platformName} '
-            '(${device.remoteId.str}) - connected',
-      );
-    }
-
-    if (_connecting || !await FlutterBluePlus.isSupported) {
-      return found.values.toList();
-    }
-    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
-      return found.values.toList();
-    }
-
-    _connecting = true; // keep the auto-reconnect scan out of the way
-    final sub = FlutterBluePlus.onScanResults.listen((results) {
-      for (final r in results) {
-        if (_isEspCandidate(r)) {
-          found[r.device.remoteId.str] = UsbPortOption(
-            id: r.device.remoteId.str,
-            label: _describeScan(r),
-          );
-        }
-      }
-    });
-    try {
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 4),
-        androidScanMode: AndroidScanMode.lowLatency,
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 4200));
-    } catch (e) {
-      debugLog.warn('BLE device enumeration failed: $e');
-    } finally {
-      await sub.cancel();
+    if (!_usbPluginUnavailable) {
       try {
-        await FlutterBluePlus.stopScan();
-      } catch (_) {}
-      _connecting = false;
+        final devices = await UsbSerial.listDevices();
+        if (devices.isNotEmpty) {
+          return [
+            for (final device in devices)
+              UsbPortOption(
+                id: device.deviceName,
+                label: '${_describeUsbDevice(device)} (${device.deviceName})',
+              ),
+          ];
+        }
+      } on MissingPluginException {
+        _usbPluginUnavailable = true;
+      } catch (e) {
+        debugLog.warn('USB device enumeration failed: $e');
+      }
     }
-    return found.values.toList();
+
+    List<String> ports = const [];
+    try {
+      ports = List<String>.from(SerialPort.availablePorts);
+    } catch (e) {
+      debugLog.warn('Desktop serial enumeration failed: $e');
+    }
+    return [for (final port in ports) UsbPortOption(id: port, label: port)];
   }
 
-  /// Reacts to a device pinned/unpinned in Config (state already updated by
-  /// DashboardState.updateUsbPortSelection): drops the link and rescans.
+  /// Reacts to a user port selection made in Config -> Connectivity (the
+  /// state is already updated by DashboardState.updateUsbPortSelection):
+  /// tears down the current connection and reconnects to the chosen port.
   void applyPortSelection(String portId) {
-    final hadLink = _hasLink;
+    final hadPort = _port != null || _desktopPort != null;
     final wasSimulated = state.isSimulated;
-    unawaited(_teardownLink());
+    _subscription?.cancel();
+    _subscription = null;
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
+    _port?.close();
+    _port = null;
+    _desktopPort?.close();
+    _desktopPort = null;
     state.setConnectionState(false);
 
     if (portId.isEmpty) {
-      debugLog.info('BLE device selection cleared; using auto-detection');
+      debugLog.info('USB port selection cleared; using auto-detection');
     } else {
-      debugLog.info('BLE device selection changed to $portId');
+      debugLog.info('USB port selection changed to $portId');
     }
-    if (hadLink && !wasSimulated && !state.enableSimulation) {
+    if (hadPort && !wasSimulated && !state.enableSimulation) {
       unawaited(_connect());
     }
   }
 
-  /// Kept so existing callers compile. BLE has no baud rate.
+  /// Reacts to a baud rate change made in Config -> Connectivity (the state
+  /// is already updated by DashboardState.updateUsbBaudRate): reopens the
+  /// current port at the new baud so the change applies without a restart.
   void applyBaudRate(int baud) {
-    debugLog.info('Baud rate ($baud) ignored: BLE link has no baud setting');
+    final hadPort = _port != null || _desktopPort != null;
+    final wasSimulated = state.isSimulated;
+    _subscription?.cancel();
+    _subscription = null;
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
+    _port?.close();
+    _port = null;
+    _desktopPort?.close();
+    _desktopPort = null;
+    state.setConnectionState(false);
+
+    debugLog.info('USB baud rate changed to $baud; reconnecting');
+    if (hadPort && !wasSimulated && !state.enableSimulation) {
+      unawaited(_connect());
+    }
+  }
+
+  /// Order of desktop serial ports to try. The user's Config selection wins,
+  /// then an explicit --dart-define=DESKTOP_SERIAL_PORT=COM5, then
+  /// auto-detection: native ESP32 CDC (/dev/ttyACM*), then classic UART
+  /// bridges (/dev/ttyUSB*, e.g. CP2102/CH340 WROOM boards), then anything
+  /// else (Windows COM ports, in enumeration order). Missing candidates are
+  /// skipped so a stale selection degrades to auto-detection instead of
+  /// blocking the reconnect loop.
+  List<String> _candidateDesktopPorts() {
+    List<String> available;
+    try {
+      available = List<String>.from(SerialPort.availablePorts);
+    } catch (e) {
+      debugLog.error('Desktop serial enumeration failed: $e');
+      return <String>[];
+    }
+
+    if (available.isEmpty) {
+      return <String>[];
+    }
+
+    final selected = state.usbPortSelection;
+    final ordered = <String>[];
+    if (selected.isNotEmpty && available.contains(selected)) {
+      ordered.add(selected);
+    }
+    if (hasExplicitDesktopSerialPort &&
+        defaultDesktopSerialPort != selected &&
+        available.contains(defaultDesktopSerialPort)) {
+      ordered.add(defaultDesktopSerialPort);
+    }
+    final nativeUsb = <String>[];
+    final uartBridges = <String>[];
+    final others = <String>[];
+    for (final port in available) {
+      if (port == selected || port == defaultDesktopSerialPort) {
+        continue;
+      }
+      if (port.startsWith('/dev/ttyACM')) {
+        nativeUsb.add(port);
+      } else if (port.startsWith('/dev/ttyUSB')) {
+        uartBridges.add(port);
+      } else {
+        others.add(port);
+      }
+    }
+    ordered.addAll(nativeUsb);
+    ordered.addAll(uartBridges);
+    ordered.addAll(others);
+    final seen = <String>{};
+    return [
+      for (final port in ordered)
+        if (seen.add(port)) port,
+    ];
+  }
+
+  Future<void> _connectDesktopSerial() async {
+    if (_desktopPort != null) {
+      return;
+    }
+
+    final candidates = _candidateDesktopPorts();
+    if (candidates.isEmpty) {
+      _logThrottled(
+        'no_serial_ports',
+        'No desktop serial ports available; retrying...',
+      );
+      return;
+    }
+
+    final explicit = hasExplicitDesktopSerialPort
+        ? ' (explicit --dart-define)'
+        : ' (auto-detected)';
+    _logThrottled(
+      'serial_try_ports',
+      'Desktop serial: trying ${candidates.join(', ')}$explicit',
+      minInterval: const Duration(minutes: 1),
+    );
+
+    for (final portName in candidates) {
+      try {
+        final port = SerialPort(portName);
+        if (!port.openRead()) {
+          debugLog.warn(
+            'Failed to open serial port $portName: ${SerialPort.lastError}',
+          );
+          port.dispose();
+          continue;
+        }
+
+        // For ESP32-C3 USB Serial/JTAG (CDC-ACM) the baud rate is
+        // informational; for classic UART bridges it must match the
+        // firmware (115200 typical). Configurable in Config -> Connectivity.
+        final config = port.config;
+        config.baudRate = state.usbBaudRate;
+        port.config = config;
+
+        _desktopPort = port;
+        state.setConnectionState(true);
+        debugLog.info(
+          'Opened serial port $portName @ ${state.usbBaudRate} baud',
+        );
+
+        _desktopSubscription = SerialPortReader(port).stream.listen(
+          _processBytes,
+          onDone: _handleDesktopDisconnect,
+          onError: (Object e) {
+            debugLog.error('Serial stream error on $portName: $e');
+            _handleDesktopDisconnect();
+          },
+        );
+        return;
+      } catch (e) {
+        debugLog.warn('Serial connect error on $portName: $e');
+        _desktopPort?.close();
+        _desktopPort = null;
+      }
+    }
+
+    _logThrottled(
+      'serial_all_failed',
+      'All serial candidates failed; retrying...',
+    );
+  }
+
+  void _handleDesktopDisconnect() {
+    _desktopSubscription?.cancel();
+    _desktopSubscription = null;
+    _desktopPort?.close();
+    _desktopPort = null;
+    state.setConnectionState(false);
+    debugLog.warn('Desktop serial port disconnected');
+  }
+
+  void _handleDisconnect() {
+    _port?.close();
+    _port = null;
+    _subscription?.cancel();
+    state.setSimulatedState(false);
+    state.setConnectionState(false);
+    debugLog.warn('USB device disconnected');
   }
 
   void _startMockSimulation() {
