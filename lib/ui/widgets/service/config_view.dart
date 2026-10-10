@@ -107,7 +107,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
       (
         section: ConfigSection.connectivity,
         label: 'Connectivity',
-        icon: Icons.usb_rounded,
+        icon: Icons.bluetooth_rounded,
       ),
       (
         section: ConfigSection.canDictionary,
@@ -235,7 +235,6 @@ class ConfigViewState extends ConsumerState<ConfigView>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _infoRow('BAUD RATE', '500000'),
                 ValueListenableBuilder<int>(
                   valueListenable: state.canLogVersion,
                   builder: (context, _, _) => _infoRow(
@@ -245,7 +244,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                   ),
                 ),
                 _infoRow(
-                  'USB',
+                  'BLE',
                   state.isConnected ? 'CONNECTED' : 'DISCONNECTED',
                   valueColor: state.isConnected
                       ? p.green
@@ -297,7 +296,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
             children: [
               Expanded(
                 child: Text(
-                  'USB PORT SELECT',
+                  'BLE DEVICE SELECT',
                   style: TextStyle(
                     color: p.cyan,
                     fontSize: 11,
@@ -317,7 +316,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                         ),
                       )
                     : Icon(Icons.refresh_rounded, color: p.dimText, size: 18),
-                tooltip: 'Refresh port list',
+                tooltip: 'Scan for ESP32 devices',
                 visualDensity: VisualDensity.compact,
                 onPressed: _usbPortsLoading ? null : _refreshUsbPortOptions,
               ),
@@ -342,7 +341,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
             items: [
               const DropdownMenuItem<String>(
                 value: null,
-                child: Text('AUTO DETECT'),
+                child: Text('AUTO (STRONGEST ESP32)'),
               ),
               for (final option in _usbPortOptions)
                 DropdownMenuItem<String>(
@@ -360,59 +359,10 @@ class ConfigViewState extends ConsumerState<ConfigView>
           const SizedBox(height: 6),
           Text(
             selected.isEmpty
-                ? 'Auto-detect: prefers native ESP32 USB, then WROOM bridges (CP210x/CH340/FTDI).'
+                ? 'Auto: connects to the strongest ESP32 advertising the Nordic UART service (or an EcoArchers* name).'
                 : selectedInList
-                ? 'Pinned to $selected. Unplug to fall back to auto-detect.'
-                : 'Pinned to $selected (not currently present; using auto-detect).',
-            style: TextStyle(color: p.dimText, fontSize: 10),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'USB SERIAL BAUD RATE',
-            style: TextStyle(
-              color: p.cyan,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
-            ),
-          ),
-          const SizedBox(height: 4),
-          DropdownButtonFormField<int>(
-            initialValue: state.usbBaudRate,
-            isExpanded: true,
-            dropdownColor: p.light ? Colors.white : const Color(0xFF181818),
-            style: TextStyle(color: p.mainText, fontSize: 12),
-            decoration: InputDecoration(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 8,
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-              ),
-              isDense: true,
-            ),
-            items: const [
-              DropdownMenuItem<int>(value: 9600, child: Text('9600')),
-              DropdownMenuItem<int>(value: 19200, child: Text('19200')),
-              DropdownMenuItem<int>(value: 38400, child: Text('38400')),
-              DropdownMenuItem<int>(value: 57600, child: Text('57600')),
-              DropdownMenuItem<int>(value: 115200, child: Text('115200')),
-              DropdownMenuItem<int>(value: 230400, child: Text('230400')),
-              DropdownMenuItem<int>(value: 460800, child: Text('460800')),
-              DropdownMenuItem<int>(value: 500000, child: Text('500000')),
-              DropdownMenuItem<int>(value: 921600, child: Text('921600')),
-            ],
-            onChanged: (value) {
-              if (value != null) {
-                state.updateUsbBaudRate(value);
-              }
-            },
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'UART bridges (CP210x/CH340/FTDI) must match firmware baud '
-            '(115200 typical); native ESP32 CDC ignores it.',
+                ? 'Pinned to $selected. Clear the selection to fall back to auto.'
+                : 'Pinned to $selected (not advertising right now; will connect when seen).',
             style: TextStyle(color: p.dimText, fontSize: 10),
           ),
         ],
@@ -541,7 +491,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
             children: [
               Expanded(
                 child: Text(
-                  'USB DEBUG LOG (${entries.length})',
+                  'BLE DEBUG LOG (${entries.length})',
                   style: TextStyle(
                     color: p.cyan,
                     fontSize: 11,
@@ -552,7 +502,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
               ),
               IconButton(
                 icon: Icon(Icons.clear_all_rounded, color: p.dimText, size: 18),
-                tooltip: 'Clear USB debug log',
+                tooltip: 'Clear BLE debug log',
                 visualDensity: VisualDensity.compact,
                 onPressed: entries.isEmpty ? null : log.clear,
               ),
@@ -570,7 +520,7 @@ class ConfigViewState extends ConsumerState<ConfigView>
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Text(
-                        'No USB events logged yet.',
+                        'No BLE events logged yet.',
                         style: TextStyle(color: p.dimText, fontSize: 11),
                       ),
                     ),
