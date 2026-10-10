@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Independent at-least-once v2 MQTT archive; acks follow a durable flush (once per second)."""
+"""Independent at-least-once v2 MQTT archive; acks follow a durable flush."""
 
 import csv
 from collections import OrderedDict
 import json
 import os
 import signal
+import sys
 import threading
+import time
 from datetime import datetime, timezone
 
 from telemetry_contract import (
@@ -18,6 +20,9 @@ MQTT_HOST = os.environ.get("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 TOPIC_EVENTS = os.environ.get("TOPIC_EVENTS", "telemetry/eco_archers/events")
 TOPIC_SESSIONS = os.environ.get("TOPIC_SESSIONS", "telemetry/eco_archers/sessions")
+ACK_BATCH = 10  # half of Mosquitto max_inflight_messages (20)
+ACK_INTERVAL_SECONDS = 0.2
+ACK_POLL_SECONDS = 0.05
 
 
 class CsvSink:
@@ -88,10 +93,15 @@ class AckTracker:
         if qos > 0:
             self._pending.append((mid, qos))
 
+    def due(self):
+        return len(self._pending) >= ACK_BATCH
+
     def flush_and_ack(self, client):
         with self.lock:
-            batch, self._pending = self._pending, []
+            # A failed flush keeps the ids pending, so they are acked by the
+            # next successful flush instead of pinning broker inflight slots.
             self.sink.flush_all()
+            batch, self._pending = self._pending, []
             for mid, qos in batch:
                 client.ack(mid, qos)
 
@@ -152,8 +162,16 @@ def main():
     client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
     client.loop_start()
     try:
-        while not stop.wait(1):
-            acks.flush_and_ack(client)
+        # Unacked messages hold broker inflight slots (max_inflight_messages),
+        # so flush often enough that the archive never throttles delivery.
+        last = time.monotonic()
+        while not stop.wait(ACK_POLL_SECONDS):
+            if acks.due() or time.monotonic() - last >= ACK_INTERVAL_SECONDS:
+                try:
+                    acks.flush_and_ack(client)
+                except OSError as error:
+                    print(f"csv flush failed: {error}", file=sys.stderr, flush=True)
+                last = time.monotonic()
     finally:
         try:
             acks.flush_and_ack(client)

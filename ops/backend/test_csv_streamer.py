@@ -75,6 +75,29 @@ class CsvStreamerAckTest(unittest.TestCase):
         self.acks.flush_and_ack(self.client)
         self.assertEqual(self.client.acked, [])
 
+    def test_failed_flush_keeps_ids_pending(self):
+        cs.on_connect(self.client, self.data, None, 0)
+        cs.on_message(self.client, self.data, self.msg(4))
+        real = self.sink.flush_all
+
+        def failing():
+            raise OSError("disk full")
+        self.sink.flush_all = failing
+        with self.assertRaises(OSError):
+            self.acks.flush_and_ack(self.client)
+        self.assertEqual(self.client.acked, [])
+        self.sink.flush_all = real
+        self.acks.flush_and_ack(self.client)
+        self.assertEqual(self.client.acked, [(4, 1)])
+
+    def test_due_before_inflight_window_fills(self):
+        cs.on_connect(self.client, self.data, None, 0)
+        for mid in range(1, cs.ACK_BATCH):
+            cs.on_message(self.client, self.data, self.msg(mid))
+        self.assertFalse(self.acks.due())
+        cs.on_message(self.client, self.data, self.msg(cs.ACK_BATCH))
+        self.assertTrue(self.acks.due())
+
 
 if __name__ == "__main__":
     unittest.main()
