@@ -11,7 +11,6 @@ import 'package:telemetry_dashboard/services/location/android_foreground_telemet
 import 'package:telemetry_dashboard/services/persistence/app_preferences_service.dart';
 import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
 import 'package:telemetry_dashboard/services/ingest/command_dictionary_service.dart';
-import 'package:telemetry_dashboard/services/orchestration/driver_alert_service.dart';
 import 'package:telemetry_dashboard/services/location/gps_source_manager.dart';
 import 'package:telemetry_dashboard/services/persistence/telemetry_journal.dart';
 import 'package:telemetry_dashboard/services/transport/mqtt_service.dart';
@@ -42,7 +41,6 @@ class TelemetryRuntimeCoordinator {
   late UsbService _usbService;
   late MqttService _mqttService;
   late GpsSourceManager _gpsSourceManager;
-  DriverAlertService? _driverAlertService;
   PhoneGpsFallbackService? _phoneGpsFallbackService;
 
   TelemetryRuntimeCoordinator({
@@ -78,7 +76,6 @@ class TelemetryRuntimeCoordinator {
     state.onReadableCopyMaxFileBytesChanged = null;
     state.onSimulationToggleChanged = null;
     state.onRequestLocalStorageClear = null;
-    _driverAlertService?.stop();
     if (_foregroundServiceRunning) {
       unawaited(_foregroundTelemetryService.stop());
       _foregroundServiceRunning = false;
@@ -131,8 +128,6 @@ class TelemetryRuntimeCoordinator {
 
     _recorder = TelemetryRecorder(state, journal: _journal);
     _mqttService = MqttService(state, journal: _journal);
-    _driverAlertService = DriverAlertService(state: state);
-    _driverAlertService!.start();
 
     _gpsSourceManager = GpsSourceManager(
       state,

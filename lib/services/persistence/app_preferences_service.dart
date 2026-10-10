@@ -1,8 +1,6 @@
-import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
 import 'package:telemetry_dashboard/providers/dashboard_state.dart';
 import 'package:telemetry_dashboard/services/ingest/ingest_transport.dart';
@@ -26,16 +24,17 @@ class AppPreferencesService {
       'prefs.readable_copy_retention_days';
   static const String _kReadableCopyMaxFileBytes =
       'prefs.readable_copy_max_file_bytes';
-  static const String _kAlertAudioEnabled = 'prefs.alert_audio_enabled';
-  static const String _kAlertHapticsEnabled = 'prefs.alert_haptics_enabled';
-  static const String _kAlertAdvisoryEnabled = 'prefs.alert_advisory_enabled';
-  static const String _kAlertVolume = 'prefs.alert_volume';
-  static const String _kAlertCooldownMs = 'prefs.alert_cooldown_ms';
-  static const String _kAlertCriticalRepeatCount =
-      'prefs.alert_critical_repeat_count';
-  static const String _kAlertCriticalRepeatIntervalMs =
-      'prefs.alert_critical_repeat_interval_ms';
-  static const String _kAlertVariables = 'prefs.alert_variables';
+  // Driver alerts were removed; these keys are cleared once on restore.
+  static const List<String> _retiredKeys = <String>[
+    'prefs.alert_audio_enabled',
+    'prefs.alert_haptics_enabled',
+    'prefs.alert_advisory_enabled',
+    'prefs.alert_volume',
+    'prefs.alert_cooldown_ms',
+    'prefs.alert_critical_repeat_count',
+    'prefs.alert_critical_repeat_interval_ms',
+    'prefs.alert_variables',
+  ];
   static const String _kLastKnownLat = 'prefs.last_known_lat';
   static const String _kLastKnownLon = 'prefs.last_known_lon';
 
@@ -55,14 +54,6 @@ class AppPreferencesService {
       state.gpsFallbackPeriodMs,
       state.readableCopyRetentionDays,
       state.readableCopyMaxFileBytes,
-      state.alertAudioEnabled,
-      state.alertHapticsEnabled,
-      state.alertAdvisoryEnabled,
-      state.alertVolume.toStringAsFixed(3),
-      state.alertCooldownMs,
-      state.alertCriticalRepeatCount,
-      state.alertCriticalRepeatIntervalMs,
-      jsonEncode(_alertVariablesToJson(state)),
     ].join('|');
   }
 
@@ -138,61 +129,9 @@ class AppPreferencesService {
       state.setReadableCopyMaxFileBytes(readableCopyMaxFileBytes);
     }
 
-    final alertAudioEnabled = prefs.getBool(_kAlertAudioEnabled);
-    if (alertAudioEnabled != null) {
-      state.setAlertAudioEnabled(alertAudioEnabled);
-    }
-
-    final alertHapticsEnabled = prefs.getBool(_kAlertHapticsEnabled);
-    if (alertHapticsEnabled != null) {
-      state.setAlertHapticsEnabled(alertHapticsEnabled);
-    }
-
-    final alertAdvisoryEnabled = prefs.getBool(_kAlertAdvisoryEnabled);
-    if (alertAdvisoryEnabled != null) {
-      state.setAlertAdvisoryEnabled(alertAdvisoryEnabled);
-    }
-
-    final alertVolume = prefs.getDouble(_kAlertVolume);
-    if (alertVolume != null) {
-      state.setAlertVolume(alertVolume);
-    }
-
-    final alertCooldownMs = prefs.getInt(_kAlertCooldownMs);
-    if (alertCooldownMs != null) {
-      state.setAlertCooldownMs(alertCooldownMs);
-    }
-
-    final alertCriticalRepeatCount = prefs.getInt(_kAlertCriticalRepeatCount);
-    if (alertCriticalRepeatCount != null) {
-      state.setAlertCriticalRepeatCount(alertCriticalRepeatCount);
-    }
-
-    final alertCriticalRepeatIntervalMs = prefs.getInt(
-      _kAlertCriticalRepeatIntervalMs,
-    );
-    if (alertCriticalRepeatIntervalMs != null) {
-      state.setAlertCriticalRepeatIntervalMs(alertCriticalRepeatIntervalMs);
-    }
-
-    final alertVariablesRaw = prefs.getString(_kAlertVariables);
-    if (alertVariablesRaw != null) {
-      try {
-        final decoded = jsonDecode(alertVariablesRaw);
-        if (decoded is Map<String, dynamic>) {
-          decoded.forEach((keyWire, rawSettings) {
-            if (rawSettings is! Map<String, dynamic>) {
-              return;
-            }
-            final key = alertVariableKeyFromWire(keyWire);
-            final settings = AlertVariableSettings.fromJson(rawSettings);
-            if (key != null && settings != null) {
-              state.applyAlertVariableSettings(key, settings);
-            }
-          });
-        }
-      } catch (_) {
-        // Ignore malformed persisted alert variable settings.
+    for (final key in _retiredKeys) {
+      if (prefs.containsKey(key)) {
+        await prefs.remove(key);
       }
     }
 
@@ -230,32 +169,11 @@ class AppPreferencesService {
       _kReadableCopyMaxFileBytes,
       state.readableCopyMaxFileBytes,
     );
-    await prefs.setBool(_kAlertAudioEnabled, state.alertAudioEnabled);
-    await prefs.setBool(_kAlertHapticsEnabled, state.alertHapticsEnabled);
-    await prefs.setBool(_kAlertAdvisoryEnabled, state.alertAdvisoryEnabled);
-    await prefs.setDouble(_kAlertVolume, state.alertVolume);
-    await prefs.setInt(_kAlertCooldownMs, state.alertCooldownMs);
-    await prefs.setInt(
-      _kAlertCriticalRepeatCount,
-      state.alertCriticalRepeatCount,
-    );
-    await prefs.setInt(
-      _kAlertCriticalRepeatIntervalMs,
-      state.alertCriticalRepeatIntervalMs,
-    );
-    await prefs.setString(_kAlertVariables, jsonEncode(_alertVariablesToJson(state)));
     if (state.lastKnownLat != null) {
       await prefs.setDouble(_kLastKnownLat, state.lastKnownLat!);
     }
     if (state.lastKnownLon != null) {
       await prefs.setDouble(_kLastKnownLon, state.lastKnownLon!);
     }
-  }
-
-  Map<String, Object?> _alertVariablesToJson(DashboardState state) {
-    return <String, Object?>{
-      for (final entry in state.alertVariables.entries)
-        entry.key.wireValue: entry.value.toJson(),
-    };
   }
 }

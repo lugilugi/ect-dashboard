@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.0-rc.5 — Unreleased
+
+- Removed the Config -> Throttle mapping screen. The app no longer sends
+  CMD:THROTTLE_MAP; the ESP32 firmware must use a fixed default throttle curve
+  (pending firmware-owner confirmation). Throttle_Percent remains a CAN reading,
+  and the shared command, deadman and framing paths are unchanged.
+- Removed the in-app driver alert system (audio, haptic and threshold alerts),
+  its Config -> Alerts screen, the Android alert-cue channel and the VIBRATE
+  permission. Saved alert preferences are cleared on first launch. Grafana
+  server-side alert rules are unchanged.
+- Housekeeping: ignore Python bytecode in git and Docker contexts, and set the
+  package description. Telemetry, schema and server contracts are unchanged.
+
 ## 3.0.0-rc.4 — 10 October 2026
 
 - Added Bluetooth LE as a selectable vehicle link on Android (Config ->

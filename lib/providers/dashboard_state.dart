@@ -3,7 +3,6 @@ import 'dart:collection';
 import 'dart:async';
 import 'dart:math';
 import 'package:telemetry_dashboard/models/session/session_models.dart';
-import 'package:telemetry_dashboard/models/alerts/driver_alert_models.dart';
 import 'package:telemetry_dashboard/models/telemetry/tx_can_command.dart';
 import 'package:telemetry_dashboard/services/orchestration/lap_boundary_service.dart';
 import 'package:telemetry_dashboard/services/ingest/can_tx_service.dart';
@@ -82,30 +81,6 @@ class _SessionTicker {
   }
 }
 
-class AlertStateStore {
-  bool alertAudioEnabled = true;
-  bool alertHapticsEnabled = true;
-  bool alertAdvisoryEnabled = true;
-  double alertVolume = 0.75;
-  int alertCooldownMs = 1500;
-  int alertCriticalRepeatCount = 2;
-  int alertCriticalRepeatIntervalMs = 550;
-  String lastAlertCode = 'NONE';
-  String lastAlertReasonClass = 'NONE';
-  DriverAlertSeverity? lastAlertSeverity;
-  DateTime? lastAlertAtUtc;
-  Future<void> Function()? onRequestAlertTestTone;
-  final Map<AlertVariableKey, AlertVariableSettings> alertVariables = {
-    for (final spec in alertVariableSpecs)
-      spec.key: AlertVariableSettings(
-        enabled: spec.defaultEnabled,
-        minThreshold: spec.defaultMin,
-        maxThreshold: spec.defaultMax,
-        cue: spec.defaultCue,
-      ),
-  };
-}
-
 class ReadableCopyStateStore {
   int retentionDays = 7;
   int maxFileBytes = 4 * 1024 * 1024;
@@ -123,12 +98,6 @@ class ReadableCopyStateStore {
 }
 
 class ConfigStateStore {
-  List<double> throttleMap = [0.0, 25.0, 50.0, 75.0, 100.0];
-  List<double> throttleMapDraft = [0.0, 25.0, 50.0, 75.0, 100.0];
-  String selectedThrottleMapProfile = 'Default';
-  final Map<String, List<double>> throttleMapPresets = {
-    'Default': [0.0, 25.0, 50.0, 75.0, 100.0],
-  };
   bool useLightTheme = false;
   bool useDictionaryAuxDispatch = true;
   double speedUpperThreshold = 40.0;
@@ -207,7 +176,6 @@ class DashboardState extends ChangeNotifier {
   bool _ownsSpoolHealth = true;
   UsbDebugLogStore _usbDebugLog = UsbDebugLogStore();
   bool _ownsUsbDebugLog = true;
-  final AlertStateStore _alerts = AlertStateStore();
   final ReadableCopyStateStore _readableCopy = ReadableCopyStateStore();
   final ConfigStateStore _config = ConfigStateStore();
   final TelemetryMetricsStore _metrics = TelemetryMetricsStore();
@@ -218,7 +186,6 @@ class DashboardState extends ChangeNotifier {
 
   SpoolHealthStore get spoolHealth => _spoolHealth;
   SessionControlStore get sessionControl => _sessionControl;
-  AlertStateStore get alerts => _alerts;
   ReadableCopyStateStore get readableCopy => _readableCopy;
   ConfigStateStore get config => _config;
   TelemetryMetricsStore get metrics => _metrics;
@@ -539,14 +506,6 @@ class DashboardState extends ChangeNotifier {
     _lapBoundaryService.setDeadzone(Duration(milliseconds: crossingDeadzoneMs));
 
     notifyListeners();
-  }
-
-  String get lastAlertSeverityText {
-    return lastAlertSeverity?.wireValue ?? 'NONE';
-  }
-
-  String get alertVolumePercentText {
-    return '${(alertVolume * 100).round()}%';
   }
 
   @visibleForTesting
@@ -984,108 +943,6 @@ class DashboardState extends ChangeNotifier {
   int commandAckCount = 0;
   int commandRejectedCount = 0;
 
-  bool get alertAudioEnabled => _alerts.alertAudioEnabled;
-  set alertAudioEnabled(bool value) => _alerts.alertAudioEnabled = value;
-  bool get alertHapticsEnabled => _alerts.alertHapticsEnabled;
-  set alertHapticsEnabled(bool value) => _alerts.alertHapticsEnabled = value;
-  bool get alertAdvisoryEnabled => _alerts.alertAdvisoryEnabled;
-  set alertAdvisoryEnabled(bool value) => _alerts.alertAdvisoryEnabled = value;
-  double get alertVolume => _alerts.alertVolume;
-  set alertVolume(double value) => _alerts.alertVolume = value;
-  int get alertCooldownMs => _alerts.alertCooldownMs;
-  set alertCooldownMs(int value) => _alerts.alertCooldownMs = value;
-  int get alertCriticalRepeatCount => _alerts.alertCriticalRepeatCount;
-  set alertCriticalRepeatCount(int value) =>
-      _alerts.alertCriticalRepeatCount = value;
-  int get alertCriticalRepeatIntervalMs =>
-      _alerts.alertCriticalRepeatIntervalMs;
-  set alertCriticalRepeatIntervalMs(int value) =>
-      _alerts.alertCriticalRepeatIntervalMs = value;
-  String get lastAlertCode => _alerts.lastAlertCode;
-  set lastAlertCode(String value) => _alerts.lastAlertCode = value;
-  String get lastAlertReasonClass => _alerts.lastAlertReasonClass;
-  set lastAlertReasonClass(String value) =>
-      _alerts.lastAlertReasonClass = value;
-  DriverAlertSeverity? get lastAlertSeverity => _alerts.lastAlertSeverity;
-  set lastAlertSeverity(DriverAlertSeverity? value) =>
-      _alerts.lastAlertSeverity = value;
-  DateTime? get lastAlertAtUtc => _alerts.lastAlertAtUtc;
-  set lastAlertAtUtc(DateTime? value) => _alerts.lastAlertAtUtc = value;
-
-  Map<AlertVariableKey, AlertVariableSettings> get alertVariables =>
-      _alerts.alertVariables;
-
-  void setAlertVariableEnabled(AlertVariableKey key, bool enabled) {
-    final settings = _alerts.alertVariables[key];
-    if (settings == null || settings.enabled == enabled) {
-      return;
-    }
-    settings.enabled = enabled;
-    notifyListeners();
-  }
-
-  void setAlertVariableMinThreshold(AlertVariableKey key, double value) {
-    final settings = _alerts.alertVariables[key];
-    if (settings == null || settings.minThreshold == value) {
-      return;
-    }
-    settings.minThreshold = value;
-    notifyListeners();
-  }
-
-  void setAlertVariableMaxThreshold(AlertVariableKey key, double value) {
-    final settings = _alerts.alertVariables[key];
-    if (settings == null || settings.maxThreshold == value) {
-      return;
-    }
-    settings.maxThreshold = value;
-    notifyListeners();
-  }
-
-  void setAlertVariableCue(AlertVariableKey key, AlertCue cue) {
-    final settings = _alerts.alertVariables[key];
-    if (settings == null || settings.cue == cue) {
-      return;
-    }
-    settings.cue = cue;
-    notifyListeners();
-  }
-
-  void applyAlertVariableSettings(
-    AlertVariableKey key,
-    AlertVariableSettings settings,
-  ) {
-    final current = _alerts.alertVariables[key];
-    if (current == null) {
-      return;
-    }
-    current.enabled = settings.enabled;
-    current.minThreshold = settings.minThreshold;
-    current.maxThreshold = settings.maxThreshold;
-    notifyListeners();
-  }
-
-  double alertVariableValue(AlertVariableKey key) {
-    switch (key) {
-      case AlertVariableKey.voltage:
-        return mainVoltage;
-      case AlertVariableKey.current:
-        return current780;
-      case AlertVariableKey.power:
-        return mainVoltage * current780;
-      case AlertVariableKey.speed:
-        return speedKmh;
-      case AlertVariableKey.mcTemp:
-        return mcTempC;
-      case AlertVariableKey.battTemp:
-        return battTempC;
-      case AlertVariableKey.bmsMinCell:
-        return bmsCells.isEmpty ? 0.0 : bmsCells.reduce(min);
-      case AlertVariableKey.bus12V:
-        return bus12V;
-    }
-  }
-
   int get readableCopyRetentionDays => _readableCopy.retentionDays;
   set readableCopyRetentionDays(int value) =>
       _readableCopy.retentionDays = value;
@@ -1224,30 +1081,6 @@ class DashboardState extends ChangeNotifier {
   }
 
   // Configuration
-  List<double> get throttleMap => _config.throttleMap;
-  set throttleMap(List<double> value) => _config.throttleMap = value;
-  List<double> get throttleMapDraft => _config.throttleMapDraft;
-  set throttleMapDraft(List<double> value) => _config.throttleMapDraft = value;
-  String get selectedThrottleMapProfile => _config.selectedThrottleMapProfile;
-  set selectedThrottleMapProfile(String value) =>
-      _config.selectedThrottleMapProfile = value;
-  Map<String, List<double>> get _throttleMapPresets =>
-      _config.throttleMapPresets;
-
-  List<String> get throttleMapPresetNames {
-    return _throttleMapPresets.keys.toList(growable: false);
-  }
-
-  List<String> get customThrottleMapPresetNames {
-    return _throttleMapPresets.keys
-        .where((name) => name != 'Default')
-        .toList(growable: false);
-  }
-
-  bool get throttleMapDirty {
-    return !_throttleMapEquals(throttleMap, throttleMapDraft);
-  }
-
   String get crossingDeadzoneConfigText {
     final seconds = crossingDeadzoneMs / 1000.0;
     return '${seconds.toStringAsFixed(1)} s';
@@ -1460,74 +1293,6 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setAlertAudioEnabled(bool enabled) {
-    if (alertAudioEnabled == enabled) {
-      return;
-    }
-    alertAudioEnabled = enabled;
-    notifyListeners();
-  }
-
-  void setAlertHapticsEnabled(bool enabled) {
-    if (alertHapticsEnabled == enabled) {
-      return;
-    }
-    alertHapticsEnabled = enabled;
-    notifyListeners();
-  }
-
-  void setAlertAdvisoryEnabled(bool enabled) {
-    if (alertAdvisoryEnabled == enabled) {
-      return;
-    }
-    alertAdvisoryEnabled = enabled;
-    notifyListeners();
-  }
-
-  void setAlertVolume(double value) {
-    final bounded = value.clamp(0.0, 1.0);
-    if ((alertVolume - bounded).abs() < 0.001) {
-      return;
-    }
-    alertVolume = bounded;
-    notifyListeners();
-  }
-
-  void setAlertCooldownMs(int value) {
-    final bounded = value.clamp(0, 10000);
-    if (alertCooldownMs == bounded) {
-      return;
-    }
-    alertCooldownMs = bounded;
-    notifyListeners();
-  }
-
-  void setAlertCriticalRepeatCount(int value) {
-    final bounded = value.clamp(0, 6);
-    if (alertCriticalRepeatCount == bounded) {
-      return;
-    }
-    alertCriticalRepeatCount = bounded;
-    notifyListeners();
-  }
-
-  void setAlertCriticalRepeatIntervalMs(int value) {
-    final bounded = value.clamp(150, 5000);
-    if (alertCriticalRepeatIntervalMs == bounded) {
-      return;
-    }
-    alertCriticalRepeatIntervalMs = bounded;
-    notifyListeners();
-  }
-
-  void requestAlertTestTone() {
-    final callback = _alerts.onRequestAlertTestTone;
-    if (callback == null) {
-      return;
-    }
-    unawaited(callback());
-  }
-
   Future<void> refreshReadableCopyPreview() async {
     final callback = onRequestReadableCopyPreview;
     if (callback == null) {
@@ -1618,20 +1383,6 @@ class DashboardState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void recordAlertEmission({
-    required String alertCode,
-    required DriverAlertSeverity severity,
-    String? reasonClass,
-    DateTime? atUtc,
-  }) {
-    _alerts.lastAlertCode = alertCode;
-    _alerts.lastAlertSeverity = severity;
-    _alerts.lastAlertReasonClass = reasonClass ?? 'NONE';
-    _alerts.lastAlertAtUtc = (atUtc ?? DateTime.now().toUtc()).toUtc();
-
-    notifyListeners();
-  }
-
   void updateSpeedThresholds(double lower, double upper) {
     speedLowerThreshold = lower;
     speedUpperThreshold = upper;
@@ -1670,89 +1421,6 @@ class DashboardState extends ChangeNotifier {
   @visibleForTesting
   void recordRecoveryResume({DateTime? atUtc}) {
     _spoolHealth.recordRecoveryResume(atUtc: atUtc);
-  }
-
-  void updateThrottleMap(int index, double value) {
-    final bounded = value.clamp(0.0, 100.0);
-    throttleMapDraft[index] = bounded;
-    _refreshThrottleMapProfileSelection();
-    notifyListeners();
-  }
-
-  void loadThrottleMapPreset(String profileName) {
-    final preset = _throttleMapPresets[profileName];
-    if (preset == null) {
-      return;
-    }
-
-    throttleMapDraft = List<double>.from(preset);
-    selectedThrottleMapProfile = profileName;
-    notifyListeners();
-  }
-
-  bool addThrottleMapPreset(String profileName) {
-    final normalized = profileName.trim();
-    if (normalized.isEmpty) {
-      return false;
-    }
-
-    if (normalized.toLowerCase() == 'default') {
-      return false;
-    }
-
-    final duplicate = _throttleMapPresets.keys.any(
-      (existing) => existing.toLowerCase() == normalized.toLowerCase(),
-    );
-    if (duplicate) {
-      return false;
-    }
-
-    _throttleMapPresets[normalized] = List<double>.from(throttleMapDraft);
-    selectedThrottleMapProfile = normalized;
-    notifyListeners();
-    return true;
-  }
-
-  void resetThrottleMapDraftToApplied() {
-    throttleMapDraft = List<double>.from(throttleMap);
-    _refreshThrottleMapProfileSelection();
-    notifyListeners();
-  }
-
-  void applyThrottleMapDraft() {
-    throttleMap = List<double>.from(throttleMapDraft);
-    _refreshThrottleMapProfileSelection();
-
-    final mapPayload = throttleMap
-        .map((value) => value.round().clamp(0, 100))
-        .join(',');
-    sendUsbCommand('CMD:THROTTLE_MAP:$mapPayload\n');
-
-    notifyListeners();
-  }
-
-  void _refreshThrottleMapProfileSelection() {
-    String? matched;
-    for (final entry in _throttleMapPresets.entries) {
-      if (_throttleMapEquals(entry.value, throttleMapDraft)) {
-        matched = entry.key;
-        break;
-      }
-    }
-
-    selectedThrottleMapProfile = matched ?? '';
-  }
-
-  bool _throttleMapEquals(List<double> a, List<double> b) {
-    if (a.length != b.length) {
-      return false;
-    }
-    for (int i = 0; i < a.length; i++) {
-      if ((a[i] - b[i]).abs() > 0.5) {
-        return false;
-      }
-    }
-    return true;
   }
 
   @visibleForTesting
