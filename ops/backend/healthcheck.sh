@@ -9,3 +9,10 @@ wget -qO /dev/null http://127.0.0.1:"$CSV_SERVER_PORT"/
 for service in telegraf csv-streamer; do
   supervisorctl -c /etc/supervisord.conf status "$service" | grep -q RUNNING
 done
+# Warn-only backlog alarm: never affects the exit status, because an unhealthy
+# container would be restarted and could drop the queued data.
+stored=$(mosquitto_sub -h 127.0.0.1 -t '$SYS/broker/messages/stored' -C 1 -W 3 2>/dev/null || true)
+case "$stored" in
+  ''|*[!0-9]*) ;;
+  *) [ "$stored" -le "${QUEUE_WARN_MESSAGES:-50000}" ] || echo "WARN: broker stored messages $stored > ${QUEUE_WARN_MESSAGES:-50000}" >&2 ;;
+esac
