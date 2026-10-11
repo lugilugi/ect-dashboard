@@ -35,6 +35,11 @@ services:
     image: eclipse-mosquitto:2.0
     restart: unless-stopped
     init: true
+    # The shared config persists to /var/lib/mosquitto, which the image does
+    # not own; a fresh named volume is root-owned and the broker (which drops
+    # to the mosquitto user) cannot save its queues there.
+    entrypoint: ["/bin/sh", "-c", "chown mosquitto:mosquitto /var/lib/mosquitto && exec /docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
     ports:
       - "${MQTT_PORT:-1883}:1883"
     volumes:
