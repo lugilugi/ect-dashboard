@@ -289,3 +289,34 @@ TX->ack under 350 ms and no timeouts; out-of-range reconnect while logging;
 screen-off session with the foreground service (add the connectedDevice type
 only if this drops); external GPS triplets within 3 s; USB<->BLE switch
 mid-session; timestamp skew compared with USB at the same load.
+
+## Schema 3 backend (3.0.0-rc.5): staged ingest and observation analytics
+
+Qualification is unchanged in scope. tools/qualify_backend.py now expects schema
+version 3, checks the 1 s ingest_staged job and the staging grant, measures
+publish-to-SQL latency through the scheduled job, and runs the job
+(CALL ingest_staged()) before asserting that duplicates were ignored.
+
+| Check | Compose | Single container |
+|---|---:|---:|
+| Dart journal vs SQL/local CSV/server CSV | 41/41 each | 41/41 each |
+| Panel/variable/alert queries (each at two lap selections) | 53 | 53 |
+| Outage/restart records reconciled in SQL/server CSV | 121/121 each | 121/121 each |
+| Burst records delivered to SQL and CSV | 3,200 | 3,200 |
+| Publish-to-SQL latency, 5 probes (s, includes polling) | 0.67-2.06 | 1.36-2.55 |
+| ingest_staged job failures | 0 | 0 |
+
+Python unit tests: 10 (ops/backend) and 6 (tools) passed on host Python 3.14.5
+(CI pins 3.12). On a disposable TimescaleDB 2.17.2/PG16 container, separate SQL
+checks covered these cases. Every invalid cast and range went to quarantine
+with its reason. Same-batch and stored duplicates were silently ignored, and
+conflicting ones were diagnosed. Revisions arriving in the same batch out of
+order kept the newest. An equal revision with different content was rejected,
+including against the stored row. A row that only failed at insert (a
+timestamp outside the partitioning range) fell back to per-row processing:
+only that row was quarantined. The job ran about every second, taking around
+20 ms when idle. The staged-to-typed lag was 0.4-0.9 s. With about 0.9 M stored
+rows, a 20,000-row batch took 1.5 s for new rows and 2.1 s when every row was a
+redelivery. Per-session telemetry_seconds/lap_analytics on a one-hour, 20 Hz,
+four-signal session took about 0.8-1.2 s.
+Hardware qualification remains pending.

@@ -28,6 +28,39 @@ this gate.
    new publishers. If qualification fails, stop recording and fix forward or
    choose another explicit paired reset; discarded data is not migrated back.
 
+## Schema 3 server cutover (3.0.0-rc.5 backend)
+
+Schema version 3 replaces the per-row INSTEAD OF ingest triggers with Telegraf
+staging tables and the 1 s ingest_staged job, adds ingest-maintained
+latest_signal_values/session_bounds, time-weighted observation-only analytics,
+the latest_session view, a lap-crossing partial index and a 2-day compression
+policy. The wire contract stays ect.telemetry.v2: phone builds, topics, event
+and session JSON, identity/time and CSV are unchanged, so no phone reset or
+reinstall is needed and phone/server may be upgraded independently.
+
+Bootstrap stays fresh-only; there is no migration script (owner decision,
+11 October 2026). An existing schema-2 volume fails the fingerprint check: the
+new single container is unhealthy and its Telegraf waits, and Compose holds
+Telegraf/Grafana behind the database health check. The volume is preserved and
+never altered. To cut over:
+
+1. Let the broker queue drain into SQL, or keep the phones' journals (7 days of
+   ACKed history) and server CSV so missing rows can be replayed afterwards.
+2. Optionally snapshot old data with the reader export (export_to_csv.sh or
+   export_snapshot.py) and keep the old database volume for rollback.
+3. Stop the stack. Point it at a new dedicated database volume, or remove only
+   this application's database volume. Keep the Mosquitto volume so queued
+   offline messages and persistent consumer sessions survive; keep Grafana and
+   CSV volumes.
+4. Start the new release. Check schema_metadata shows version 3 and the current
+   fingerprint, ingest_status drains to 0, and the ingest_staged job reports no
+   failures (db/scripts/verify_setup.sql prints both).
+5. Re-ingest anything needed with tools/replay_csv.py from server or phone CSV
+   (original identities and times are kept), then reconcile.
+
+Rollback: stop the new stack and reattach the preserved schema-2 volume with the
+previous release images.
+
 ## Real phone/CAN smoke test (pending)
 
 - Driver/Service switching, actual CAN IDs/units, USB reconnect/baud/simulation;

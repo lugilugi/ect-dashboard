@@ -20,21 +20,20 @@ WHERE schemaname = 'public'
   AND tablename = 'telemetry_raw'
 ORDER BY indexname;
 
-\echo '=== Compression/Retention Jobs ==='
+\echo '=== Background jobs (compression policy, 1 s staged ingest) ==='
 SELECT
   j.job_id,
   j.proc_name,
-  j.schedule_interval
+  j.schedule_interval,
+  s.last_run_status,
+  s.total_failures
 FROM timescaledb_information.jobs j
-WHERE j.proc_name LIKE '%policy%'
+LEFT JOIN timescaledb_information.job_stats s USING (job_id)
+WHERE j.proc_name LIKE '%policy%' OR j.proc_name = 'ingest_staged'
 ORDER BY j.job_id;
 
-\echo '=== Ingestion Views ==='
-SELECT schemaname, viewname
-FROM pg_views
-WHERE schemaname = 'public'
-  AND viewname IN ('sessions_ingest_view','telemetry_ingest_view')
-ORDER BY viewname;
+\echo '=== Ingest staging backlog ==='
+SELECT * FROM ingest_status ORDER BY kind;
 
 \echo '=== Sanity counts ==='
 SELECT COUNT(*) AS session_rows FROM sessions;

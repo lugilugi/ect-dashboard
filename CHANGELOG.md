@@ -13,6 +13,27 @@
 - Housekeeping: ignore Python bytecode in git and Docker contexts, and set the
   package description. Telemetry, schema and server contracts are unchanged.
 
+### Backend (SQL schema 3, clean server reset)
+
+- Ingest: Telegraf now writes plain TEXT staging tables. A TimescaleDB job runs
+  every second and validates and merges them in one set-based pass. This
+  replaces the per-row triggers and their savepoint per record. Dedup,
+  conflict diagnosis, revision ordering and quarantine are unchanged. The job
+  also maintains latest-signal and session-bounds tables, so Grafana alerts
+  and session discovery no longer scan telemetry history.
+- Analytics: per-second and per-lap speed, power and accumulator figures now
+  use original observations only (no sampler snapshots). They are
+  time-weighted, holding each value until the next observation, capped at
+  freshness. Dashboard signal plots use observation time. Power, distribution
+  and coasting panels read the shared telemetry_seconds model.
+- Grafana: alert rules read a new sessions-only latest_session view. Panel and
+  alert queries compare session_uid as a UUID, so indexes are used.
+- Storage: compression after 2 days (was 2 hours), plus a lap-crossing partial
+  index.
+- The wire contract (ect.telemetry.v2) and phone build are unchanged. Existing
+  schema-2 volumes are preserved and reported unhealthy. Follow the schema 3
+  steps in docs/implementation/cutover.md.
+
 ## 3.0.0-rc.4 — 10 October 2026
 
 - Added Bluetooth LE as a selectable vehicle link on Android (Config ->

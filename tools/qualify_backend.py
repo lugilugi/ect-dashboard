@@ -19,6 +19,7 @@ import yaml
 from reconcile_telemetry import reconcile
 
 ROOT = Path(__file__).resolve().parents[1]
+SCHEMA_VERSION = "3"  # wire contract stays ect.telemetry.v2
 
 def run(command, data=None):
     result = subprocess.run(command, input=data, stdout=subprocess.PIPE,
@@ -95,8 +96,8 @@ volumes:
                 for key, value in self.env.items():
                     command += ["-e", key + "=" + value]
                 run(command + ["ect-backend-v2-test"])
-        wait_for(lambda: self.sql("SELECT version FROM schema_metadata") == "2",
-                 "initialized v2 schema")
+        wait_for(lambda: self.sql("SELECT version FROM schema_metadata") == SCHEMA_VERSION,
+                 "initialized schema")
         import hashlib
         checksum = hashlib.sha256((ROOT / "db/schema.sql").read_bytes()).hexdigest()
         assert self.sql("SELECT schema_sha256 FROM schema_metadata") == checksum
@@ -112,6 +113,10 @@ volumes:
         return self.command("timescaledb",
                             ["env", "PGPASSWORD=v2test", "psql", "-h", "127.0.0.1", "-U", "v2owner", "-d", "v2custom", "-qAt",
                              "-v", "ON_ERROR_STOP=1", "-c", sql]).strip()
+
+    def drain(self):
+        """Run the staged-ingest job now (serialized with the scheduled run)."""
+        self.sql("CALL ingest_staged()")
 
     def publish(self, topic, payload):
         self.command("mosquitto", ["mosquitto_pub", "-h", "127.0.0.1", "-q", "1",
@@ -194,7 +199,7 @@ for name,content in json.load(sys.stdin).items():
     else:
         raise AssertionError('Fresh-only initializer adopted an existing schema')
     stack.command('timescaledb', pg + ['psql', '-qAt', '-v', 'ON_ERROR_STOP=1', '-c',
-                  "SELECT 1 / count(*) FROM schema_metadata WHERE version=2 AND schema_sha256 <> 'uninitialized'"])
+                  "SELECT 1 / count(*) FROM schema_metadata WHERE version=3 AND schema_sha256 <> 'uninitialized'"])
     export_script = '/usr/local/bin/export_snapshot.py' if args.layout == 'single' else '/ops/backend/export_snapshot.py'
     reader = ['env', 'PGHOST=127.0.0.1', 'PGDATABASE=v2custom', 'PGUSER=grafana_reader', 'PGPASSWORD=readertest']
     stack.command('timescaledb', reader + ['python3', export_script, '--output', '/tmp/ect-snapshots'])
@@ -255,6 +260,7 @@ def qualify(stack, args, scratch):
     assert stack.sql(f"SELECT count(DISTINCT time)||'|'||count(DISTINCT lap_number) FROM telemetry_samples WHERE session_uid='{uid}'") == "2|2"
     stack.publish("events", fixture)
     time.sleep(2)
+    stack.drain()
     assert count() == 2
     final_metadata = dict(metadata, metadata_revision=3, session_state="ENDED",
                           ended_at_utc="2026-10-06T01:00:10Z", laps_completed=1)
@@ -275,6 +281,18 @@ def qualify(stack, args, scratch):
     # Independent source age is stale despite recent ingestion.
     assert stack.sql(f"SELECT bool_or(is_fresh) FROM latest_signals WHERE session_uid='{uid}'") == "f"
     assert stack.sql("SELECT has_table_privilege('telegraf_ingest','telemetry_raw','INSERT')") == "f"
+    assert stack.sql("SELECT has_table_privilege('telegraf_ingest','telemetry_ingest','INSERT')") == "t"
+    assert stack.sql("SELECT schedule_interval FROM timescaledb_information.jobs WHERE proc_name='ingest_staged'") == "00:00:01"
+    # Scheduled-job latency: MQTT publish until the typed row is visible, no manual drain.
+    latencies = []
+    for probe in range(5):
+        probe_uid = str(uuid.uuid4())
+        begin = time.monotonic()
+        stack.publish("events", {"schema_version": 2, "events": [dict(events[0], session_uid=probe_uid)]})
+        wait_for(lambda: stack.sql(f"SELECT count(*) FROM telemetry_samples WHERE session_uid='{probe_uid}'") == "1",
+                 "scheduled staged ingest", timeout=30)
+        latencies.append(round(time.monotonic() - begin, 2))
+    print(f"MQTT-to-SQL latencies via ingest job (s, includes polling): {latencies}", flush=True)
     print("Contract ordering, idempotency, quarantine and role boundary passed", flush=True)
 
     # Non-empty analytics: a resetting cumulative counter contributes its new value.
@@ -409,19 +427,25 @@ finally:
     wait_for(lambda: len(stack.csv(outage_uid)) >= sequence, "CSV subscriber restart")
     # A clean broker/layout restart preserves database, archive and subscription state.
     stack.restart()
-    wait_for(lambda: stack.sql("SELECT version FROM schema_metadata") == "2", "layout restart")
+    wait_for(lambda: stack.sql("SELECT version FROM schema_metadata") == SCHEMA_VERSION, "layout restart")
     wait_for(lambda: len(stack.csv(outage_uid)) >= sequence, "archive survives restart")
     # Redelivery to compressed storage remains idempotent.
     stack.sql("SELECT compress_chunk(c, if_not_compressed=>true) FROM show_chunks('telemetry_raw') c")
     stack.publish("events", fixture)
     time.sleep(3)
+    stack.drain()
     assert count() == 3
+    assert stack.sql("SELECT sum(staged_rows) FROM ingest_status") == "0"
+    job_failures = stack.sql("SELECT total_failures FROM timescaledb_information.job_stats s "
+                             "JOIN timescaledb_information.jobs j USING (job_id) WHERE j.proc_name='ingest_staged'")
     rows = json.loads(stack.sql(f"SELECT json_agg(t) FROM (SELECT * FROM telemetry_samples WHERE session_uid='{outage_uid}') t"))
     result = reconcile(outage_events, rows)
     assert not result["missing"] and not result["conflicts"], result
     csv_result = reconcile(outage_events, stack.csv(outage_uid))
     assert not csv_result["missing"] and not csv_result["conflicts"], csv_result
-    return {"layout": args.layout, "schema_version": 2, "queries_executed": len(queries()),
+    return {"layout": args.layout, "schema_version": int(SCHEMA_VERSION), "contract": "ect.telemetry.v2",
+            "queries_executed": len(queries()), "ingest_latency_seconds": latencies,
+            "ingest_job_failures": int(job_failures),
             "outage_seconds_each": args.outage_seconds, "outage_records": sequence,
             "phone_process": phone_result, "hardware_qualification": "pending", "recovery_tools": recovery_tools,
             "outage_sql": result, "outage_csv": csv_result, "throughput_records": 3200,
