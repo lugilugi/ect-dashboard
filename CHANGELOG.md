@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.0.0-rc.5 — Unreleased
+## 3.0.0-rc.5 — 11 October 2026
 
 - Removed the Config -> Throttle mapping screen. The app no longer sends
   CMD:THROTTLE_MAP; the ESP32 firmware must use a fixed default throttle curve
@@ -10,8 +10,27 @@
   its Config -> Alerts screen, the Android alert-cue channel and the VIBRATE
   permission. Saved alert preferences are cleared on first launch. Grafana
   server-side alert rules are unchanged.
+- Phone upload path: the sender wakes on each journal commit and keeps sending
+  while a backlog exists, with up to 8 envelopes awaiting PUBACK at once. Each
+  round's acks and failures are written in one transaction, and a record is
+  never in two envelopes at once. Reads are sized to fill the in-flight window,
+  PUBACK waits grow with the queue, and reconnect backoff runs 1 s to 15 s.
+- Phone journal: schema 5, migrated in place from 4 with pending records,
+  watermarks and the checkpoint kept (no downgrade to rc.4 afterwards). Pending
+  count, bytes and oldest record are kept in memory instead of rescanned.
+  appendRecords returns a typed result: a full storage budget rejects only
+  capture metrics (one aggregated Recording_Loss, identities consumed), while
+  session metadata and control events (lap, recovery, loss) are always stored.
+  Conflicting records go to a new journal_failed table, shown as FAILED RECORDS
+  in storage health. The recorder commits every 200 ms or at 250 queued
+  records, and recording resumes when the backlog drains instead of stalling.
+- Broker and server CSV: Mosquitto queues are bounded by bytes (1.5 GB per
+  client, set by max_queued_bytes in ops/backend/mosquitto.conf) and autosave
+  every 30 s. The server CSV logger acknowledges a message only after its rows
+  are fsynced. The Compose broker can now write its persistence volume; before,
+  queued messages did not survive a broker restart in that layout.
 - Housekeeping: ignore Python bytecode in git and Docker contexts, and set the
-  package description. Telemetry, schema and server contracts are unchanged.
+  package description. Telemetry event and session JSON are unchanged.
 
 ### Backend (SQL schema 3, clean server reset)
 
@@ -36,9 +55,9 @@
   batch back and leaves it staged.
 - Storage: compression after 2 days (was 2 hours), plus a lap-crossing partial
   index.
-- The wire contract (ect.telemetry.v2) and phone build are unchanged. Existing
-  schema-2 volumes are preserved and reported unhealthy. Follow the schema 3
-  steps in docs/implementation/cutover.md.
+- The wire contract (ect.telemetry.v2) is unchanged, so phone and server can be
+  upgraded independently. Existing schema-2 volumes are preserved and reported
+  unhealthy. Follow the schema 3 steps in docs/implementation/cutover.md.
 
 ## 3.0.0-rc.4 — 10 October 2026
 
