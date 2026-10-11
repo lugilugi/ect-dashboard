@@ -61,6 +61,10 @@ never altered. To cut over:
 Rollback: stop the new stack and reattach the preserved schema-2 volume with the
 previous release images.
 
+A database initialized by 3.0.0-rc.5 is schema 3 with an older fingerprint
+(before the restart-recovery fix to the ingest jobs). The next release reports
+it unhealthy and preserves it in the same way; use the same steps to reset it.
+
 ## Real phone/CAN smoke test (pending)
 
 - Driver/Service switching, actual CAN IDs/units, USB reconnect/baud/simulation;

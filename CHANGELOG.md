@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Backend (SQL schema 3, new fingerprint)
+
+- Ingest resumes at once after a database restart. TimescaleDB 2.17 holds a
+  job whose worker a PostgreSQL stop, restart or crash killed mid-run for at
+  least 5 minutes (a fixed minimum that retry_period does not shorten). In
+  3.0.0-rc.5 the single ingest_staged job could be caught that way, so SQL
+  ingest stopped for about 5 minutes after such a restart; rows stayed staged
+  or queued and nothing was lost. CI's Compose qualification hit this after its
+  layout restart. Two identical jobs now share the ingest lock: only the holder
+  can be caught mid-batch, the other takes over at once, and its first locked
+  run replaces the held job with a fresh one. Qualification now pins an ingest
+  run mid-batch, restarts the database and requires ingest within 60 s.
+- schema.sql changed, so a database initialized by 3.0.0-rc.5 fails the new
+  fingerprint check and is preserved. Reset it with the schema 3 steps in
+  docs/implementation/cutover.md. The wire contract is unchanged.
+
 ## 3.0.0-rc.5 — 11 October 2026
 
 - Removed the Config -> Throttle mapping screen. The app no longer sends

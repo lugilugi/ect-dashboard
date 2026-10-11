@@ -335,3 +335,47 @@ host measured 2.5-2.6 s per 20,000 new rows, against 1.9-2.1 s before the fix
 (about 8,000 rows/s), and 1.7 s for 20,000 redeliveries. Publish-to-SQL latency was 0.82-2.22 s (Compose) and 1.34-2.55 s
 (single container).
 Hardware qualification remains pending.
+
+## Ingest restart recovery (after 3.0.0-rc.5)
+
+CI run 38150397930 failed the Compose qualification on the rc.5 commit: after
+the layout restart, two envelopes did not reach SQL within 90 s. The database
+log showed the ingest job's worker killed inside ingest_metric_range by the
+shutdown. TimescaleDB 2.17.2 counts a job killed mid-run as crashed and holds
+its next start for at least 5 minutes (MIN_WAIT_AFTER_CRASH_MS in
+src/bgw/job_stat.c). Reproduced on disposable timescale/timescaledb:2.17.2-pg16
+containers. A 1 s job killed mid-run by docker restart next ran 5:00 later
+with the default retry_period and again with retry_period 1 s. Neither
+alter_job(next_start => now()) nor toggling scheduled shortened the hold. With
+the rc.5 schema, a restart that caught the ingest job mid-batch left it idle
+for 303 s. This is a product stall, not only a test race: rows stay staged or
+queued, but SQL ingest pauses for about 5 minutes after such a restart.
+
+Fix: two identical try-lock ingest jobs, and the lock holder replaces a sibling
+held after a crash (see BACKEND_GUIDE.md). Schema SHA-256 (LF):
+1ee2fc21978b29748a227621da2768d62abea81a5fec20c96744871f7e2ff908.
+
+Evidence on a disposable database with this schema: four back-to-back restarts,
+each with a run pinned mid-batch, had the pinned job replaced and both jobs
+running within about 1 s of the database accepting connections each time.
+There were exactly 4 replacements. Idle, the job ids stayed unchanged with no
+spurious replacement. Each job ran about once per second, at about 23 ms per
+run. qualify_backend.py adds the same case: a table lock pins one scheduled run
+inside its batch, the database restarts, and ingest must resume within 60 s
+with the crashed job replaced.
+
+| Check | Compose (4 runs) | Single container |
+|---|---:|---:|
+| Dart journal vs SQL/local CSV/server CSV | 41/41 each | 41/41 each |
+| Panel/variable/alert queries (each at two lap selections) | 53 | 53 |
+| Outage/restart records reconciled in SQL/server CSV | 121/121 each | 121/121 each |
+| Burst records delivered to SQL and CSV | 3,200 | 3,200 |
+| Publish-to-SQL latency, 5 probes (s, includes 1 s polling) | 2.02-2.10 | 1.37-2.58 |
+| Ingest after a restart killed a run mid-batch (s) | 2.08-3.47 | 4.01 |
+| ingest_staged job failures | 0 | 0 |
+
+Two of the Compose runs overlapped (started 150 s apart) to load the host. Python
+unit tests: 10 (ops/backend) and 6 (tools) passed on host Python 3.14.5. Host:
+Windows 11, Docker Desktop 29.5.2. A restart that catches both jobs inside a
+run at once (the holder's batch and the other job's run of about 23 ms) still
+waits out the 5-minute hold. Hardware qualification remains pending.

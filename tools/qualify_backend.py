@@ -103,10 +103,12 @@ volumes:
         checksum = hashlib.sha256((ROOT / "db/schema.sql").read_bytes()).hexdigest()
         assert self.sql("SELECT schema_sha256 FROM schema_metadata") == checksum
 
-    def command(self, service, command, data=None):
-        base = (self.compose + ["exec", "-T", service] if self.args.layout == "compose"
+    def exec_base(self, service):
+        return (self.compose + ["exec", "-T", service] if self.args.layout == "compose"
                 else ["docker", "exec", "-i", self.name])
-        return run(base + command, data)
+
+    def command(self, service, command, data=None):
+        return run(self.exec_base(service) + command, data)
 
     def sql(self, sql, reader=False):
         if reader:
@@ -288,6 +290,49 @@ def qualify_compressed_mixed(stack, fixture):
     print("Mixed redelivery/live and gap-repair batches against compressed chunks passed", flush=True)
     return {"compressed_mixed_batch": "passed", "compressed_gap_repair": "passed"}
 
+def qualify_restart_recovery(stack, fixture):
+    """A database restart that kills an ingest run mid-batch must not stall ingest.
+
+    TimescaleDB holds a job killed mid-run for at least 5 minutes. A table lock
+    pins one scheduled run inside its batch, the database restarts, and the
+    surviving job must ingest a new envelope and replace the crashed job.
+    """
+    holder_sql = "BEGIN; LOCK TABLE telemetry_ingest IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(600);"
+    holder = subprocess.Popen(stack.exec_base("timescaledb") + [
+        "env", "PGPASSWORD=v2test", "psql", "-h", "127.0.0.1", "-U", "v2owner", "-d", "v2custom",
+        "-qAt", "-c", holder_sql], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        pinned = []
+        def pinned_run():
+            pinned[:] = stack.sql(r"SELECT substring(application_name FROM '\[(\d+)\]') FROM pg_stat_activity "
+                                  "WHERE application_name LIKE 'User-Defined Action [%' "
+                                  "AND wait_event_type = 'Lock'").split()
+            return len(pinned) == 1
+        wait_for(pinned_run, "an ingest run blocked inside its batch", timeout=30)
+        stack.lifecycle("restart", "timescaledb")
+    finally:
+        try:
+            holder.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            holder.wait()
+    wait_for(lambda: stack.sql("SELECT version FROM schema_metadata") == SCHEMA_VERSION, "database restart")
+    probe_uid = str(uuid.uuid4())
+    begin = time.monotonic()
+    stack.publish("events", {"schema_version": 2, "events": [dict(fixture["events"][0], session_uid=probe_uid)]})
+    wait_for(lambda: stack.sql(f"SELECT count(*) FROM telemetry_samples WHERE session_uid='{probe_uid}'") == "1",
+             "ingest after a restart killed a run mid-batch", timeout=60)
+    latency = round(time.monotonic() - begin, 2)
+    jobs = "SELECT job_id FROM timescaledb_information.jobs WHERE proc_name='ingest_staged'"
+    wait_for(lambda: pinned[0] not in stack.sql(jobs).split() and len(stack.sql(jobs).split()) == 2,
+             "crashed ingest job replaced", timeout=30)
+    wait_for(lambda: stack.sql("SELECT count(*) FROM timescaledb_information.job_stats s JOIN "
+                               "timescaledb_information.jobs j USING (job_id) WHERE j.proc_name='ingest_staged' "
+                               "AND s.total_runs > 0") == "2", "both ingest jobs running", timeout=30)
+    print(f"Restart that killed ingest job {pinned[0]} mid-batch: ingest resumed in {latency}s "
+          "and the crashed job was replaced", flush=True)
+    return {"killed_job": int(pinned[0]), "publish_to_sql_seconds": latency, "crashed_job_replaced": True}
+
 def qualify(stack, args, scratch):
     fixture = json.loads((ROOT / "test/fixtures/telemetry_v2_events.json").read_text())
     uid = str(uuid.uuid4())
@@ -329,7 +374,8 @@ def qualify(stack, args, scratch):
     assert stack.sql(f"SELECT bool_or(is_fresh) FROM latest_signals WHERE session_uid='{uid}'") == "f"
     assert stack.sql("SELECT has_table_privilege('telegraf_ingest','telemetry_raw','INSERT')") == "f"
     assert stack.sql("SELECT has_table_privilege('telegraf_ingest','telemetry_ingest','INSERT')") == "t"
-    assert stack.sql("SELECT schedule_interval FROM timescaledb_information.jobs WHERE proc_name='ingest_staged'") == "00:00:01"
+    assert stack.sql("SELECT count(*)||'|'||min(schedule_interval)||'|'||max(schedule_interval) FROM "
+                     "timescaledb_information.jobs WHERE proc_name='ingest_staged'") == "2|00:00:01|00:00:01"
     # Scheduled-job latency: MQTT publish until the typed row is visible, no manual drain.
     latencies = []
     for probe in range(5):
@@ -484,7 +530,8 @@ finally:
     assert count() == 3
     compressed = qualify_compressed_mixed(stack, fixture)
     assert stack.sql("SELECT sum(staged_rows) FROM ingest_status") == "0"
-    job_failures = stack.sql("SELECT total_failures FROM timescaledb_information.job_stats s "
+    restart_recovery = qualify_restart_recovery(stack, fixture)
+    job_failures = stack.sql("SELECT COALESCE(sum(total_failures), 0) FROM timescaledb_information.job_stats s "
                              "JOIN timescaledb_information.jobs j USING (job_id) WHERE j.proc_name='ingest_staged'")
     rows = json.loads(stack.sql(f"SELECT json_agg(t) FROM (SELECT * FROM telemetry_samples WHERE session_uid='{outage_uid}') t"))
     result = reconcile(outage_events, rows)
@@ -494,6 +541,7 @@ finally:
     return {"layout": args.layout, "schema_version": int(SCHEMA_VERSION), "contract": "ect.telemetry.v2",
             "queries_executed": len(queries()), "ingest_latency_seconds": latencies,
             "ingest_job_failures": int(job_failures), "compressed_redelivery": compressed,
+            "restart_mid_batch": restart_recovery,
             "outage_seconds_each": args.outage_seconds, "outage_records": sequence,
             "phone_process": phone_result, "hardware_qualification": "pending", "recovery_tools": recovery_tools,
             "outage_sql": result, "outage_csv": csv_result, "throughput_records": 3200,

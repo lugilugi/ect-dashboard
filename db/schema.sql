@@ -371,18 +371,58 @@ BEGIN
 END $$;
 
 -- TimescaleDB job entry point; also CALLable directly. Commits per batch.
+-- A manual CALL waits for the advisory lock and drains everything. A scheduled
+-- run that finds the lock held returns at once: the holder is draining.
+--
+-- Restart recovery. TimescaleDB 2.17 counts a job whose worker was killed
+-- mid-run (any PostgreSQL stop, restart or crash) as crashed and holds its
+-- next start for at least 5 minutes (MIN_WAIT_AFTER_CRASH_MS; retry_period and
+-- alter_job(next_start) do not shorten it). Two identical jobs run this
+-- procedure. Only the lock holder can be caught mid-batch; the other job's runs
+-- return within milliseconds, so it survives and takes over at once. Its first
+-- locked run replaces a sibling left in crash hold (a run counted as crashed
+-- that started before the current job scheduler, so no worker of it can be
+-- alive) with a fresh job, which TimescaleDB starts at once, so a later
+-- restart again finds a survivor. Replacing a job never touches staged rows.
 CREATE PROCEDURE ingest_staged(job_id integer DEFAULT NULL, config jsonb DEFAULT NULL)
 LANGUAGE plpgsql AS $$
 DECLARE batch_limit constant integer := 20000; sessions_n bigint; metrics_n bigint;
+  crashed integer;
 BEGIN
+  IF ingest_staged.job_id IS NOT NULL THEN
+    IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('ect.ingest_staged')) THEN
+      RETURN;
+    END IF;
+    BEGIN
+      FOR crashed IN SELECT s.job_id FROM _timescaledb_internal.bgw_job_stat s
+          JOIN timescaledb_information.jobs j ON j.job_id = s.job_id
+          WHERE j.proc_schema = 'public' AND j.proc_name = 'ingest_staged'
+            AND s.job_id <> ingest_staged.job_id AND s.consecutive_crashes > 0
+            AND s.last_start < (SELECT a.backend_start FROM pg_catalog.pg_stat_activity a
+              WHERE a.backend_type = 'TimescaleDB Background Worker Scheduler'
+                AND a.datname = pg_catalog.current_database())
+      LOOP
+        PERFORM public.delete_job(crashed);
+        PERFORM public.add_job('public.ingest_staged', INTERVAL '1 second', fixed_schedule => false);
+        RAISE LOG 'ingest_staged: replaced job % held after a crash', crashed;
+      END LOOP;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'ingest_staged: crashed-job recovery failed: %', SQLERRM;
+    END;
+    COMMIT;  -- the replacement must survive a restart during the batch below
+  END IF;
   LOOP
+    IF ingest_staged.job_id IS NOT NULL
+       AND NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('ect.ingest_staged')) THEN
+      RETURN;
+    END IF;
     sessions_n := public.ingest_staged_batch('session', batch_limit);
     metrics_n := public.ingest_staged_batch('metric', batch_limit);
     COMMIT;
     EXIT WHEN sessions_n < batch_limit AND metrics_n < batch_limit;
   END LOOP;
 END $$;
-SELECT add_job('ingest_staged', INTERVAL '1 second', fixed_schedule => false);
+SELECT add_job('ingest_staged', INTERVAL '1 second', fixed_schedule => false) FROM generate_series(1, 2);
 
 CREATE VIEW ingest_status AS
 SELECT 'metric' AS kind, count(*) AS staged_rows, min(staged_at) AS oldest_staged_at

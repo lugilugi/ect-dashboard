@@ -91,8 +91,15 @@ deliberately in both DB roles and consumers.
 
 telegraf_ingest can insert/select the staging tables and read schema_metadata;
 it cannot write owned tables or run the ingest functions. The owner's
-TimescaleDB job ingest_staged runs every second (next run starts 1 s after the
-previous one finishes). Each run claims the oldest committed staging rows (up
+TimescaleDB jobs run ingest_staged every second (each job's next run starts
+1 s after its previous one finishes). There are two identical jobs because
+TimescaleDB 2.17 holds a job whose worker a PostgreSQL stop, restart or crash
+killed mid-run for at least 5 minutes (a fixed minimum; retry_period does not
+shorten it). Only one run holds the ingest lock at a time, and the other job's
+runs return within milliseconds, so a restart leaves a survivor that keeps
+ingesting at once. Its first locked run replaces a held sibling (a crashed run
+that started before the current job scheduler) with a fresh job, so a second
+restart soon after again finds a survivor. Each locked run claims the oldest committed staging rows (up
 to 20,000 per transaction) with DELETE ... RETURNING, validates every cast and
 CHECK in one pass (pg_input_is_valid on PG16), probes the identity unique
 index for each batch identity, inserts only identities not already stored
@@ -104,8 +111,12 @@ never targets an existing key: on TimescaleDB 2.17 a multi-row ON CONFLICT
 that hits a compressed chunk can drop or hide other rows of the statement.
 An invariant (inserted + redelivered + invalid = claimed) raises and rolls the
 batch back, leaving rows staged, rather than losing data silently. Rows a Telegraf COPY has not committed stay staged for the next
-run; an advisory lock serializes the job with manual CALL ingest_staged(), so
-no row is processed twice or lost. If a batch still hits a data error, that
+run; an advisory lock serializes the jobs with manual CALL ingest_staged(), so
+no row is processed twice or lost. A manual CALL waits for the lock and drains
+everything; a scheduled run that finds it held returns. A restart that kills
+both jobs mid-run at once (the holder's batch and the other job's
+millisecond run) still delays SQL ingest by about 5 minutes; rows stay staged
+or queued and are not lost. If a batch still hits a data error, that
 batch is retried row by row so only the offending row is quarantined.
 Operational errors roll back and leave rows staged for retry. A stopped job
 shows as growing ingest_status backlog and, while logging, the stall alert.
@@ -212,7 +223,8 @@ Requires Docker, PyYAML 6.0.2 and Flutter with pub get complete. It creates uniq
 disposable resources/custom credentials, probes both consumers, checks malformed
 neighbors, duplicates/conflicts, delayed metadata, freshness, reset totals,
 all Grafana SQL under the reader role, real Grafana API, actual Dart CAN/SQLite/
-MQTT, SQL/CSV reconciliation, fresh-only manual initialization, reader snapshots/failure cleanup, missing-record CSV repair, outages, restarts and compressed replay. It cleans
+MQTT, SQL/CSV reconciliation, fresh-only manual initialization, reader snapshots/failure cleanup, missing-record CSV repair, outages, restarts, compressed replay and a database
+restart that kills an ingest run mid-batch (ingest must resume within 60 s). It cleans
 resources in finally; --keep-on-failure retains only its test target for diagnosis.
 CI runs both layouts.
 
