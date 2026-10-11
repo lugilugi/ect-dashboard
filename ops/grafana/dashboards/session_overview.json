@@ -158,7 +158,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT avg(speed_kmh) AS avg_speed_kmh FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid;",
+          "rawSql": "SELECT sum(speed_kmh * speed_coverage_s) / NULLIF(sum(speed_coverage_s) FILTER (WHERE speed_kmh IS NOT NULL), 0) AS avg_speed_kmh FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid;",
           "refId": "A"
         }
       ],
@@ -446,7 +446,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", AVG(voltage_v * current_a)::double precision AS power_w FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid GROUP BY 1 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", (sum(voltage_v * current_a * power_coverage_s) / NULLIF(sum(power_coverage_s) FILTER (WHERE voltage_v IS NOT NULL AND current_a IS NOT NULL), 0))::double precision AS power_w FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -642,7 +642,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", (AVG(speed_kmh) / NULLIF(AVG(voltage_v * current_a) / 1000.0, 0))::double precision AS km_per_kwh FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid GROUP BY 1 HAVING AVG(speed_kmh) > 1.0 AND AVG(voltage_v * current_a) / 1000.0 > 0.5 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", ((sum(speed_kmh * speed_coverage_s) / NULLIF(sum(speed_coverage_s) FILTER (WHERE speed_kmh IS NOT NULL), 0)) / NULLIF((sum(voltage_v * current_a * power_coverage_s) / NULLIF(sum(power_coverage_s) FILTER (WHERE voltage_v IS NOT NULL AND current_a IS NOT NULL), 0)) / 1000.0, 0))::double precision AS km_per_kwh FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid GROUP BY 1 HAVING (sum(speed_kmh * speed_coverage_s) / NULLIF(sum(speed_coverage_s) FILTER (WHERE speed_kmh IS NOT NULL), 0)) > 1.0 AND (sum(voltage_v * current_a * power_coverage_s) / NULLIF(sum(power_coverage_s) FILTER (WHERE voltage_v IS NOT NULL AND current_a IS NOT NULL), 0)) / 1000.0 > 0.5 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -829,7 +829,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT band, COUNT(*) AS samples FROM (SELECT CASE WHEN p < 500 THEN '0-500 W' WHEN p < 1000 THEN '500-1000 W' WHEN p < 2000 THEN '1000-2000 W' WHEN p < 3000 THEN '2000-3000 W' ELSE '3000+ W' END AS band FROM (SELECT voltage_v * current_a AS p FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid AND voltage_v IS NOT NULL AND current_a IS NOT NULL) s) t GROUP BY band ORDER BY band;",
+          "rawSql": "SELECT band, ROUND(sum(w)::numeric, 1) AS samples FROM (SELECT CASE WHEN p < 500 THEN '0-500 W' WHEN p < 1000 THEN '500-1000 W' WHEN p < 2000 THEN '1000-2000 W' WHEN p < 3000 THEN '2000-3000 W' ELSE '3000+ W' END AS band, w FROM (SELECT voltage_v * current_a AS p, power_coverage_s AS w FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid AND voltage_v IS NOT NULL AND current_a IS NOT NULL) s) t GROUP BY band ORDER BY band;",
           "refId": "A"
         }
       ],
@@ -868,7 +868,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT band, COUNT(*) AS samples FROM (SELECT CASE WHEN t <= 0 THEN '0%' WHEN t <= 25 THEN '1-25%' WHEN t <= 50 THEN '26-50%' WHEN t <= 75 THEN '51-75%' ELSE '76-100%' END AS band FROM (SELECT throttle_percent AS t FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid AND throttle_percent IS NOT NULL) s) t GROUP BY band ORDER BY band;",
+          "rawSql": "SELECT band, ROUND(sum(w)::numeric, 1) AS samples FROM (SELECT CASE WHEN t <= 0 THEN '0%' WHEN t <= 25 THEN '1-25%' WHEN t <= 50 THEN '26-50%' WHEN t <= 75 THEN '51-75%' ELSE '76-100%' END AS band, w FROM (SELECT throttle_mean_percent AS t, throttle_coverage_s AS w FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid AND throttle_mean_percent IS NOT NULL) s) t GROUP BY band ORDER BY band;",
           "refId": "A"
         }
       ],
@@ -1189,7 +1189,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", AVG(CASE WHEN speed_kmh > 0.5 AND throttle_percent <= 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS coast_share, AVG(CASE WHEN brake_active > 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS brake_share, AVG(CASE WHEN speed_kmh <= 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS stop_share, AVG(CASE WHEN speed_kmh > 0.5 AND throttle_percent > 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS drive_share FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid GROUP BY 1 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh > 0.5 AND throttle_percent <= 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS coast_share, COALESCE((sum(speed_coverage_s) FILTER (WHERE brake_active > 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS brake_share, COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh <= 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS stop_share, COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh > 0.5 AND throttle_percent > 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS drive_share FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],
@@ -1235,7 +1235,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH s AS (SELECT speed_kmh, throttle_percent, brake_active FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid) SELECT 'DRIVE' AS metric, ROUND((AVG(CASE WHEN speed_kmh > 0.5 AND throttle_percent > 0.5 THEN 1.0 ELSE 0.0 END) * 100.0)::numeric, 1) AS value FROM s UNION ALL SELECT 'COAST/PUSH' AS metric, ROUND((AVG(CASE WHEN speed_kmh > 0.5 AND throttle_percent <= 0.5 THEN 1.0 ELSE 0.0 END) * 100.0)::numeric, 1) AS value FROM s UNION ALL SELECT 'BRAKE' AS metric, ROUND((AVG(CASE WHEN brake_active > 0.5 THEN 1.0 ELSE 0.0 END) * 100.0)::numeric, 1) AS value FROM s UNION ALL SELECT 'STOP' AS metric, ROUND((AVG(CASE WHEN speed_kmh <= 0.5 THEN 1.0 ELSE 0.0 END) * 100.0)::numeric, 1) AS value FROM s;",
+          "rawSql": "WITH s AS (SELECT speed_kmh, throttle_percent, brake_active, speed_coverage_s FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid) SELECT 'DRIVE' AS metric, ROUND((COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh > 0.5 AND throttle_percent > 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0) * 100.0)::numeric, 1) AS value FROM s UNION ALL SELECT 'COAST/PUSH' AS metric, ROUND((COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh > 0.5 AND throttle_percent <= 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0) * 100.0)::numeric, 1) AS value FROM s UNION ALL SELECT 'BRAKE' AS metric, ROUND((COALESCE((sum(speed_coverage_s) FILTER (WHERE brake_active > 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0) * 100.0)::numeric, 1) AS value FROM s UNION ALL SELECT 'STOP' AS metric, ROUND((COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh <= 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0) * 100.0)::numeric, 1) AS value FROM s;",
           "refId": "A"
         }
       ],

@@ -26,8 +26,14 @@
   time-weighted, holding each value until the next observation, capped at
   freshness. Dashboard signal plots use observation time. Power, distribution
   and coasting panels read the shared telemetry_seconds model.
-- Grafana: alert rules read a new sessions-only latest_session view. Panel and
-  alert queries compare session_uid as a UUID, so indexes are used.
+- Grafana: alert rules read a new latest_session view built from the two small
+  session tables. A new session whose metadata is still in transit is watched
+  from its first samples. Panel and alert queries compare session_uid as a
+  UUID, so indexes are used. Lap averages, shares and distributions are
+  weighted by the time each second was actually covered.
+- Ingest never inserts an already stored identity, so mixed batches and gap
+  repairs into compressed chunks cannot drop rows; any count mismatch rolls the
+  batch back and leaves it staged.
 - Storage: compression after 2 days (was 2 hours), plus a lap-crossing partial
   index.
 - The wire contract (ect.telemetry.v2) and phone build are unchanged. Existing

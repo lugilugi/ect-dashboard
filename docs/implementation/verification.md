@@ -319,4 +319,17 @@ only that row was quarantined. The job ran about every second, taking around
 rows, a 20,000-row batch took 1.5 s for new rows and 2.1 s when every row was a
 redelivery. Per-session telemetry_seconds/lap_analytics on a one-hour, 20 Hz,
 four-signal session took about 0.8-1.2 s.
+
+Review fix (same release). On TimescaleDB 2.17, a multi-row ON CONFLICT DO
+NOTHING that conflicted with a compressed chunk dropped other rows of the same
+statement, or left them out of RETURNING. The job now probes the identity index
+first and inserts only identities that are not yet stored. It also checks that
+inserted + redelivered + invalid = claimed, and rolls back on a mismatch.
+qualify_backend.py adds a compressed-chunk check: one batch with identical
+redeliveries of compressed rows plus live rows (latest value and bounds must
+advance), and a 1..10 gap-repair replay into a compressed chunk with row 5
+missing. Both layouts passed again: the same 53 queries, 41/41 Dart rows,
+121/121 outage rows, 3,200 burst rows, both compressed cases and 0 job
+failures. Publish-to-SQL latency was 0.82-2.22 s (Compose) and 1.34-2.55 s
+(single container).
 Hardware qualification remains pending.

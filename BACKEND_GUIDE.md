@@ -82,7 +82,7 @@ deliberately in both DB roles and consumers.
 | ingest_staged job / ingest_status | 1 s set-based validation/merge; staged backlog and oldest age |
 | ingest_rejections | Malformed/conflicting records and reasons |
 | session_bounds / session_catalog | Ingest-maintained sample bounds; discovery even when metrics precede metadata |
-| latest_session | Newest session by started_at, from the sessions table only (alerts) |
+| latest_session | Newest session across metadata and first samples (alerts); state NULL while metadata is in transit |
 | latest_signal_values / latest_signals | Ingest-maintained latest value per session/signal; view adds source freshness |
 | accumulator_deltas / session_totals / lap_totals | Reset-safe main-energy/distance totals over observations |
 | lap_bounds | Explicit completion diagnostics/elapsed duration |
@@ -94,10 +94,16 @@ it cannot write owned tables or run the ingest functions. The owner's
 TimescaleDB job ingest_staged runs every second (next run starts 1 s after the
 previous one finishes). Each run claims the oldest committed staging rows (up
 to 20,000 per transaction) with DELETE ... RETURNING, validates every cast and
-CHECK in one pass (pg_input_is_valid on PG16), inserts typed rows with ON
-CONFLICT DO NOTHING, quarantines invalid rows and conflicting duplicates in
-ingest_rejections, and upserts latest_signal_values and session_bounds in the
-same statement. Rows a Telegraf COPY has not committed stay staged for the next
+CHECK in one pass (pg_input_is_valid on PG16), probes the identity unique
+index for each batch identity, inserts only identities not already stored
+(ON CONFLICT DO NOTHING remains a backstop), compares redeliveries with the
+stored row or first batch arrival, quarantines invalid rows and conflicting
+duplicates in ingest_rejections (received_at = staging time), and upserts
+latest_signal_values and session_bounds in the same statement. The insert
+never targets an existing key: on TimescaleDB 2.17 a multi-row ON CONFLICT
+that hits a compressed chunk can drop or hide other rows of the statement.
+An invariant (inserted + redelivered + invalid = claimed) raises and rolls the
+batch back, leaving rows staged, rather than losing data silently. Rows a Telegraf COPY has not committed stay staged for the next
 run; an advisory lock serializes the job with manual CALL ingest_staged(), so
 no row is processed twice or lost. If a batch still hits a data error, that
 batch is retried row by row so only the offending row is quarantined.
@@ -106,7 +112,10 @@ shows as growing ingest_status backlog and, while logging, the stall alert.
 grafana_reader reads designated surfaces with a 30-second query timeout.
 Telemetry has no metadata FK: early metrics are intentionally valid.
 telemetry_raw chunks compress after 2 days, so ordinary late phone uploads land
-in uncompressed chunks; later redelivery to compressed chunks stays idempotent.
+in uncompressed chunks. Later redelivery or gap repair into compressed chunks,
+including batches mixing stored and new rows, is idempotent and lossless
+(qualified); each stored-row probe into a compressed chunk decompresses the
+matching segment, so large replays into old data are slower than live ingest.
 
 The first accumulator sample is a baseline. A reset contributes its new
 nonnegative value. Analytics use original observations only: sampler snapshots
@@ -116,7 +125,10 @@ at its freshness_ms, so change-suppressed steady values keep their time weight
 and outages are never interpolated; a non-ok observation ends the hold.
 telemetry_seconds is a time-weighted regular view rather than a continuous
 aggregate, because hold intervals need window functions; per-session queries
-push the session filter into the index. An observed lap is not automatically completed. Sequence gaps
+push the session filter into the index. A second split by a lap boundary or
+an outage yields a partial row; telemetry_seconds exposes speed/power/throttle
+coverage seconds, and lap statistics, shares and distributions weight by them.
+An observed lap is not automatically completed. Sequence gaps
 are provisional until delayed delivery is reconciled. Unsupported temperature
 and auxiliary-energy panels are removed; live alerts check original source age
 and current fault bitfields. Phone temperatures/cells are unavailable until

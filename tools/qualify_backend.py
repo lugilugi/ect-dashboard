@@ -4,6 +4,7 @@ Run one layout per invocation; unique projects/anonymous volumes are cleaned
 in finally. --existing is restricted to explicitly named test deployments.
 """
 import argparse
+from datetime import datetime, timedelta, timezone
 import base64
 import csv
 import io
@@ -241,6 +242,52 @@ for name,content in json.load(sys.stdin).items():
             'dry_run_missing_records': 1, 'replay_sql_csv': 'passed',
             'comparison': 'identity and all immutable metric fields'}
 
+def qualify_compressed_mixed(stack, fixture):
+    """Mixed batches against compressed chunks: no row may be dropped or hidden.
+
+    Each batch is one MQTT envelope, so it reaches the ingest job as one claim.
+    """
+    events = fixture["events"]
+    def utc(moment):
+        return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    def rows_of(uid):
+        return int(stack.sql(f"SELECT count(*) FROM telemetry_samples WHERE session_uid='{uid}'"))
+    def rejections(uid):
+        return int(stack.sql(f"SELECT count(*) FROM ingest_rejections WHERE payload->>'session_uid'='{uid}'"))
+    def compress():
+        stack.drain()
+        stack.sql("SELECT compress_chunk(c, if_not_compressed=>true) FROM show_chunks('telemetry_raw') c")
+    old_uid, gap_uid = str(uuid.uuid4()), str(uuid.uuid4())
+    old = [dict(row, session_uid=old_uid) for row in events]
+    def gap_row(seq):
+        return dict(events[0], session_uid=gap_uid, seq_in_session=seq, value=seq, ts_session_ms=seq * 1000,
+                    ts_wall_utc=f"2026-10-07T03:00:{seq:02d}Z", observed_at_utc=f"2026-10-07T03:00:{seq:02d}Z")
+    stack.publish("events", {"schema_version": 2, "events": old})
+    stack.publish("events", {"schema_version": 2, "events": [gap_row(seq) for seq in range(1, 11) if seq != 5]})
+    wait_for(lambda: rows_of(old_uid) == 2 and rows_of(gap_uid) == 9, "rows to compress")
+    compress()
+    assert stack.sql("SELECT bool_and(is_compressed) FROM timescaledb_information.chunks "
+                     "WHERE hypertable_name='telemetry_raw'") == "t"
+    # (a)+(c): identical redeliveries of compressed rows plus live rows in a new chunk.
+    now = datetime.now(timezone.utc)
+    live = [dict(events[0], session_uid=old_uid, seq_in_session=100 + i, value=60 + i, ts_session_ms=100000 + i,
+                 ts_wall_utc=utc(now + timedelta(milliseconds=i)), observed_at_utc=utc(now + timedelta(milliseconds=i)))
+            for i in range(2)]
+    stack.publish("events", {"schema_version": 2, "events": old + live})
+    wait_for(lambda: rows_of(old_uid) == 4, "live rows beside compressed redeliveries")
+    assert stack.sql(f"SELECT seq_in_session||'|'||value FROM latest_signals WHERE session_uid='{old_uid}' "
+                     "AND signal_name='Voltage_780'") == "101|61"
+    assert stack.sql(f"SELECT last_sample_at = '{live[1]['ts_wall_utc']}'::timestamptz FROM session_catalog "
+                     f"WHERE uid='{old_uid}'") == "t"
+    # (b): gap repair replays 1..10 into the compressed chunk; only row 5 is new.
+    stack.publish("events", {"schema_version": 2, "events": [gap_row(seq) for seq in range(1, 11)]})
+    wait_for(lambda: rows_of(gap_uid) == 10, "gap repair into compressed chunk")
+    stack.drain()
+    assert rejections(old_uid) == 0 and rejections(gap_uid) == 0
+    assert stack.sql("SELECT sum(staged_rows) FROM ingest_status") == "0"
+    print("Mixed redelivery/live and gap-repair batches against compressed chunks passed", flush=True)
+    return {"compressed_mixed_batch": "passed", "compressed_gap_repair": "passed"}
+
 def qualify(stack, args, scratch):
     fixture = json.loads((ROOT / "test/fixtures/telemetry_v2_events.json").read_text())
     uid = str(uuid.uuid4())
@@ -435,6 +482,7 @@ finally:
     time.sleep(3)
     stack.drain()
     assert count() == 3
+    compressed = qualify_compressed_mixed(stack, fixture)
     assert stack.sql("SELECT sum(staged_rows) FROM ingest_status") == "0"
     job_failures = stack.sql("SELECT total_failures FROM timescaledb_information.job_stats s "
                              "JOIN timescaledb_information.jobs j USING (job_id) WHERE j.proc_name='ingest_staged'")
@@ -445,7 +493,7 @@ finally:
     assert not csv_result["missing"] and not csv_result["conflicts"], csv_result
     return {"layout": args.layout, "schema_version": int(SCHEMA_VERSION), "contract": "ect.telemetry.v2",
             "queries_executed": len(queries()), "ingest_latency_seconds": latencies,
-            "ingest_job_failures": int(job_failures),
+            "ingest_job_failures": int(job_failures), "compressed_redelivery": compressed,
             "outage_seconds_each": args.outage_seconds, "outage_records": sequence,
             "phone_process": phone_result, "hardware_qualification": "pending", "recovery_tools": recovery_tools,
             "outage_sql": result, "outage_csv": csv_result, "throughput_records": 3200,

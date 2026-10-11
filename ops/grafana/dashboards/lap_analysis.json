@@ -890,7 +890,7 @@
           },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", AVG(CASE WHEN speed_kmh > 0.5 AND throttle_percent <= 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS coast_share, AVG(CASE WHEN brake_active > 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS brake_share, AVG(CASE WHEN speed_kmh <= 0.5 THEN 1.0 ELSE 0.0 END)::double precision AS stop_share FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid AND (${lap_number:sqlstring} = '-1' OR lap_number = ${lap_number:sqlstring}::int) GROUP BY 1 ORDER BY 1;",
+          "rawSql": "SELECT time_bucket('$__interval', time) AS \"time\", COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh > 0.5 AND throttle_percent <= 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS coast_share, COALESCE((sum(speed_coverage_s) FILTER (WHERE brake_active > 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS brake_share, COALESCE((sum(speed_coverage_s) FILTER (WHERE speed_kmh <= 0.5) / NULLIF(sum(speed_coverage_s), 0)), 0)::double precision AS stop_share FROM telemetry_seconds WHERE session_uid = NULLIF(${session_id:sqlstring},'')::uuid AND (${lap_number:sqlstring} = '-1' OR lap_number = ${lap_number:sqlstring}::int) GROUP BY 1 ORDER BY 1;",
           "refId": "A"
         }
       ],

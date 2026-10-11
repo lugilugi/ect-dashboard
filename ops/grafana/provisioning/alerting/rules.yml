@@ -1,5 +1,8 @@
 # Source freshness prevents stale replay from firing live alerts. Rules read only
-# the ingest-maintained latest_signals and the sessions-only latest_session.
+# the ingest-maintained latest_signals and latest_session (newest session across
+# metadata and first samples, so delayed metadata does not hide a new session).
+# The stall rule treats a metadata-less session as logging only while the
+# server received its rows within the last 10 minutes.
 apiVersion: 1
 groups:
 - orgId: 1
@@ -201,7 +204,8 @@ groups:
           uid: timescaledb
         format: table
         rawQuery: true
-        rawSql: SELECT CASE WHEN (SELECT session_state FROM latest_session)='LOGGING'
+        rawSql: SELECT CASE WHEN (SELECT session_state='LOGGING' OR (session_state IS
+          NULL AND last_received_at > now() - INTERVAL '10 minutes') FROM latest_session)
           THEN count(*) ELSE NULL END AS n FROM latest_signals WHERE is_fresh AND
           signal_name='Voltage_780' AND session_uid=(SELECT uid FROM latest_session);
         intervalMs: 60000

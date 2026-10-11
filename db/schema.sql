@@ -75,7 +75,8 @@ CREATE TABLE latest_signal_values (
 CREATE TABLE session_bounds (
   session_uid uuid PRIMARY KEY,
   first_sample_at timestamptz NOT NULL,
-  last_sample_at timestamptz NOT NULL
+  last_sample_at timestamptz NOT NULL,
+  last_received_at timestamptz NOT NULL  -- server clock, for stall detection
 );
 
 -- Plain TEXT staging tables written by Telegraf COPY. The plugin's time is
@@ -111,7 +112,7 @@ CREATE TABLE sessions_ingest (
 -- hashed instead of quadratic. The stored-row probe is LATERAL and unaffected.
 CREATE FUNCTION ingest_metric_range(p_from bigint, p_to bigint) RETURNS bigint
 LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp SET enable_nestloop = off AS $$
-DECLARE processed bigint;
+DECLARE n_claimed bigint; n_invalid bigint; n_redelivered bigint; n_inserted bigint;
 BEGIN
   WITH claimed AS (
     DELETE FROM telemetry_ingest WHERE staged_id BETWEEN p_from AND p_to RETURNING *
@@ -161,39 +162,34 @@ BEGIN
         COALESCE(freshness_ms::integer, 5000) AS freshness_ms
       FROM checked WHERE reason IS NULL
     ) t
+  ), stored AS MATERIALIZED (
+    -- Probe the identity unique index BEFORE inserting, so the INSERT never
+    -- targets an existing key. On TimescaleDB 2.17 a multi-row ON CONFLICT
+    -- that hits a compressed chunk can drop, or omit from RETURNING, other
+    -- rows of the same statement. The advisory lock serializes every writer.
+    SELECT e.* FROM typed t
+    CROSS JOIN LATERAL (SELECT * FROM telemetry_raw r WHERE r.time = t.time
+      AND r.session_uid = t.session_uid AND r.seq_in_session = t.seq_in_session LIMIT 1) e
+    WHERE t.arrival = 1
+  ), fresh AS MATERIALIZED (
+    SELECT t.* FROM typed t
+    WHERE t.arrival = 1 AND NOT EXISTS (SELECT 1 FROM stored s WHERE s.time = t.time
+      AND s.session_uid = t.session_uid AND s.seq_in_session = t.seq_in_session)
   ), inserted AS (
+    -- ON CONFLICT is only a backstop; the invariant below catches any loss.
     INSERT INTO telemetry_raw(time, session_uid, seq_in_session, observed_at, ts_session_ms,
       lap_number, session_state, lap_phase, signal_name, value, unit, source, quality,
       sample_kind, source_sample_id, can_id, freshness_ms, received_at)
     SELECT time, session_uid, seq_in_session, observed_at, ts_session_ms, lap_number,
       session_state, lap_phase, signal_name, value, unit, source, quality, sample_kind,
       source_sample_id, can_id, freshness_ms, staged_at
-    FROM typed WHERE arrival = 1 ORDER BY time
+    FROM fresh ORDER BY time
     ON CONFLICT (time, session_uid, seq_in_session) DO NOTHING
     RETURNING *
-  ), redelivered AS MATERIALIZED (
-    -- Usually empty: rows whose identity/time was already stored.
-    SELECT t.* FROM typed t
-    WHERE NOT EXISTS (SELECT 1 FROM inserted i WHERE i.time = t.time
-                        AND i.session_uid = t.session_uid AND i.seq_in_session = t.seq_in_session)
   ), conflicts AS (
-    -- Redelivery within this batch: compare with the first arrival just inserted.
+    -- Redelivery of a stored identity/time: compare every arrival with it.
     SELECT t.staged_id FROM typed t
-    JOIN inserted i USING (time, session_uid, seq_in_session)
-    WHERE t.arrival > 1
-      AND ROW(t.observed_at, t.ts_session_ms, t.lap_number, t.session_state, t.lap_phase,
-              t.signal_name, t.value, t.unit, t.source, t.quality, t.sample_kind,
-              t.source_sample_id, t.can_id, t.freshness_ms)
-      IS DISTINCT FROM
-          ROW(i.observed_at, i.ts_session_ms, i.lap_number, i.session_state, i.lap_phase,
-              i.signal_name, i.value, i.unit, i.source, i.quality, i.sample_kind,
-              i.source_sample_id, i.can_id, i.freshness_ms)
-    UNION ALL
-    -- Redelivery of an already stored identity/time: compare with stored
-    -- content. LATERAL ... LIMIT 1 keeps this a unique-index probe per row.
-    SELECT t.staged_id FROM redelivered t
-    CROSS JOIN LATERAL (SELECT * FROM telemetry_raw r WHERE r.time = t.time
-      AND r.session_uid = t.session_uid AND r.seq_in_session = t.seq_in_session LIMIT 1) e
+    JOIN stored e USING (time, session_uid, seq_in_session)
     WHERE ROW(t.observed_at, t.ts_session_ms, t.lap_number, t.session_state, t.lap_phase,
               t.signal_name, t.value, t.unit, t.source, t.quality, t.sample_kind,
               t.source_sample_id, t.can_id, t.freshness_ms)
@@ -201,10 +197,22 @@ BEGIN
           ROW(e.observed_at, e.ts_session_ms, e.lap_number, e.session_state, e.lap_phase,
               e.signal_name, e.value, e.unit, e.source, e.quality, e.sample_kind,
               e.source_sample_id, e.can_id, e.freshness_ms)
+    UNION ALL
+    -- Redelivery of a new identity within this batch: compare with first arrival.
+    SELECT t.staged_id FROM typed t
+    JOIN fresh f USING (time, session_uid, seq_in_session)
+    WHERE t.arrival > 1
+      AND ROW(t.observed_at, t.ts_session_ms, t.lap_number, t.session_state, t.lap_phase,
+              t.signal_name, t.value, t.unit, t.source, t.quality, t.sample_kind,
+              t.source_sample_id, t.can_id, t.freshness_ms)
+      IS DISTINCT FROM
+          ROW(f.observed_at, f.ts_session_ms, f.lap_number, f.session_state, f.lap_phase,
+              f.signal_name, f.value, f.unit, f.source, f.quality, f.sample_kind,
+              f.source_sample_id, f.can_id, f.freshness_ms)
   ), rejected AS (
     -- Payloads are built only for rejected rows: the staged TEXT record.
-    INSERT INTO ingest_rejections(kind, reason, payload)
-    SELECT 'metric', COALESCE(c.reason, 'conflicting duplicate'),
+    INSERT INTO ingest_rejections(received_at, kind, reason, payload)
+    SELECT c.staged_at, 'metric', COALESCE(c.reason, 'conflicting duplicate'),
       to_jsonb(c) - 'staged_id' - 'staged_at' - 'reason'
     FROM checked c
     WHERE c.reason IS NOT NULL OR c.staged_id IN (SELECT staged_id FROM conflicts)
@@ -226,16 +234,25 @@ BEGIN
     RETURNING 1
   ), bounds AS (
     INSERT INTO session_bounds AS b
-    SELECT session_uid, min(time), max(time) FROM inserted GROUP BY session_uid
+    SELECT session_uid, min(time), max(time), max(received_at) FROM inserted GROUP BY session_uid
     ON CONFLICT (session_uid) DO UPDATE SET
       first_sample_at = LEAST(b.first_sample_at, EXCLUDED.first_sample_at),
-      last_sample_at = GREATEST(b.last_sample_at, EXCLUDED.last_sample_at)
-    WHERE EXCLUDED.first_sample_at < b.first_sample_at
-       OR EXCLUDED.last_sample_at > b.last_sample_at
+      last_sample_at = GREATEST(b.last_sample_at, EXCLUDED.last_sample_at),
+      last_received_at = GREATEST(b.last_received_at, EXCLUDED.last_received_at)
     RETURNING 1
   )
-  SELECT count(*) INTO processed FROM checked;
-  RETURN processed;
+  SELECT (SELECT count(*) FROM claimed),
+         (SELECT count(*) FROM checked WHERE reason IS NOT NULL),
+         (SELECT count(*) FROM typed) - (SELECT count(*) FROM fresh),
+         (SELECT count(*) FROM inserted)
+    INTO n_claimed, n_invalid, n_redelivered, n_inserted;
+  -- Every claimed row is inserted, a redelivery, or rejected as invalid.
+  -- Otherwise roll back (rows stay staged) rather than lose data silently.
+  IF n_inserted + n_redelivered + n_invalid <> n_claimed THEN
+    RAISE EXCEPTION 'ingest invariant violated: claimed % = inserted % + redelivered % + invalid % fails',
+      n_claimed, n_inserted, n_redelivered, n_invalid USING ERRCODE = 'XX000';
+  END IF;
+  RETURN n_claimed;
 END $$;
 
 -- Highest revision wins; equal revisions keep first arrival and diagnose
@@ -296,7 +313,7 @@ BEGIN
   ), conflicts AS (
     -- At its arrival the record's revision equalled the current revision:
     -- compare with the stored row, or with that revision's first batch arrival.
-    SELECT t.payload FROM typed t
+    SELECT t.staged_at, t.payload FROM typed t
     LEFT JOIN sessions s ON s.uid = t.uid
     LEFT JOIN typed f ON f.uid = t.uid AND f.revision = t.revision AND f.revision_arrival = 1
     WHERE GREATEST(s.metadata_revision, t.prior_revision) = t.revision
@@ -309,10 +326,10 @@ BEGIN
              ROW(t.session_name, t.started_at, t.ended_at, t.session_state, t.laps_completed)
       END
   ), rejected AS (
-    INSERT INTO ingest_rejections(kind, reason, payload)
-    SELECT 'session', reason, payload FROM checked WHERE reason IS NOT NULL
+    INSERT INTO ingest_rejections(received_at, kind, reason, payload)
+    SELECT staged_at, 'session', reason, payload FROM checked WHERE reason IS NOT NULL
     UNION ALL
-    SELECT 'session', 'conflicting duplicate revision', payload FROM conflicts
+    SELECT staged_at, 'session', 'conflicting duplicate revision', payload FROM conflicts
     RETURNING 1
   )
   SELECT count(*) INTO processed FROM checked;
@@ -344,8 +361,8 @@ BEGIN
         ELSE PERFORM ingest_session_range(row_id, row_id); END IF;
       EXCEPTION WHEN data_exception OR integrity_constraint_violation THEN
         EXECUTE format('WITH d AS (DELETE FROM %I WHERE staged_id = $1 RETURNING *)
-          INSERT INTO ingest_rejections(kind, reason, payload)
-          SELECT $2, $3, to_jsonb(d) - ''staged_id'' - ''staged_at'' FROM d', staging)
+          INSERT INTO ingest_rejections(received_at, kind, reason, payload)
+          SELECT d.staged_at, $2, $3, to_jsonb(d) - ''staged_id'' - ''staged_at'' FROM d', staging)
           USING row_id, kind, SQLERRM;
       END;
     END LOOP;
@@ -383,12 +400,14 @@ SELECT COALESCE(s.uid, b.session_uid) AS uid,
   COALESCE(s.session_name, b.session_uid::text) AS session_name,
   COALESCE(s.started_at, b.first_sample_at) AS started_at,
   s.ended_at, s.session_state, s.laps_completed, s.metadata_revision,
-  b.first_sample_at, b.last_sample_at
+  b.first_sample_at, b.last_sample_at, b.last_received_at
 FROM sessions s FULL JOIN session_bounds b ON b.session_uid = s.uid;
 
--- Alerts follow the newest session metadata; reads only the sessions table.
+-- Alerts follow the newest session, from the two small catalog tables only
+-- (never telemetry history). A session whose metadata is still in transit is
+-- found by its first sample; its session_state is then NULL (unknown).
 CREATE VIEW latest_session AS
-SELECT * FROM sessions ORDER BY started_at DESC LIMIT 1;
+SELECT * FROM session_catalog ORDER BY started_at DESC, uid DESC LIMIT 1;
 
 CREATE VIEW latest_signals AS
 SELECT l.*,
@@ -461,7 +480,10 @@ FROM (
 WHERE quality = 'ok' AND ends_at > starts_at;
 
 -- Shared one-second time-weighted estimates over available observations.
--- NULL means a required signal had no valid held value in that second.
+-- NULL means a required signal had no valid held value in that second. A
+-- second split by a lap boundary or an outage yields partial rows: weight
+-- aggregates by the *_coverage_s columns (held seconds within the bucket,
+-- power = min of voltage/current coverage) rather than counting rows.
 CREATE VIEW telemetry_seconds AS
 SELECT i.session_uid, i.lap_number, b.time,
   sum(i.value*w.seconds) FILTER(WHERE i.signal_name='Speed_Kmh')
@@ -471,7 +493,13 @@ SELECT i.session_uid, i.lap_number, b.time,
   sum(i.value*w.seconds) FILTER(WHERE i.signal_name='Current_780')
     / NULLIF(sum(w.seconds) FILTER(WHERE i.signal_name='Current_780'),0) AS current_a,
   max(i.value) FILTER(WHERE i.signal_name='Throttle_Percent') AS throttle_percent,
-  max(i.value) FILTER(WHERE i.signal_name='Brake_Active') AS brake_active
+  max(i.value) FILTER(WHERE i.signal_name='Brake_Active') AS brake_active,
+  sum(i.value*w.seconds) FILTER(WHERE i.signal_name='Throttle_Percent')
+    / NULLIF(sum(w.seconds) FILTER(WHERE i.signal_name='Throttle_Percent'),0) AS throttle_mean_percent,
+  COALESCE(sum(w.seconds) FILTER(WHERE i.signal_name='Speed_Kmh'),0) AS speed_coverage_s,
+  LEAST(COALESCE(sum(w.seconds) FILTER(WHERE i.signal_name='Voltage_780'),0),
+        COALESCE(sum(w.seconds) FILTER(WHERE i.signal_name='Current_780'),0)) AS power_coverage_s,
+  COALESCE(sum(w.seconds) FILTER(WHERE i.signal_name='Throttle_Percent'),0) AS throttle_coverage_s
 FROM observation_intervals i
 CROSS JOIN LATERAL generate_series(time_bucket('1 second', i.starts_at),
   i.ends_at - INTERVAL '1 microsecond', INTERVAL '1 second') AS b(time)
@@ -485,8 +513,12 @@ CREATE VIEW lap_analytics AS
 WITH observed AS (
   SELECT DISTINCT session_uid,lap_number FROM telemetry_raw WHERE lap_number IS NOT NULL
 ), stats AS (
-  SELECT session_uid,lap_number,avg(speed_kmh) AS avg_speed_kmh,
-    max(speed_kmh) AS max_speed_kmh,avg(voltage_v*current_a) AS avg_power_w,
+  -- Weighted by covered duration, so partial seconds count only their share.
+  SELECT session_uid,lap_number,
+    sum(speed_kmh*speed_coverage_s)/NULLIF(sum(speed_coverage_s) FILTER(WHERE speed_kmh IS NOT NULL),0) AS avg_speed_kmh,
+    max(speed_kmh) AS max_speed_kmh,
+    sum(voltage_v*current_a*power_coverage_s)
+      /NULLIF(sum(power_coverage_s) FILTER(WHERE voltage_v IS NOT NULL AND current_a IS NOT NULL),0) AS avg_power_w,
     max(voltage_v*current_a) AS peak_power_w
   FROM telemetry_seconds GROUP BY session_uid,lap_number
 )
