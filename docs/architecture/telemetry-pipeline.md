@@ -5,8 +5,8 @@ The recorder assigns immutable observation context before transport. SQLite is
 the journal/outbox; one MQTT sender reads committed pending records.
 PUBACK means broker receipt, never database delivery.
 
-The server uses one version-2 contract: Mosquitto → Telegraf → validated SQL
-ingest views → TimescaleDB → shared analytical views → Grafana.
+The server uses one version-2 contract: Mosquitto → Telegraf → SQL staging
+tables → validating ingest job → TimescaleDB → shared analytical views → Grafana.
 Server MQTT-to-CSV capture stays independent of SQL. Local CSV is a restartable
 export of committed journal records.
 

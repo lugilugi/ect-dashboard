@@ -330,6 +330,8 @@ redeliveries of compressed rows plus live rows (latest value and bounds must
 advance), and a 1..10 gap-repair replay into a compressed chunk with row 5
 missing. Both layouts passed again: the same 53 queries, 41/41 Dart rows,
 121/121 outage rows, 3,200 burst rows, both compressed cases and 0 job
-failures. Publish-to-SQL latency was 0.82-2.22 s (Compose) and 1.34-2.55 s
+failures. The identity probe costs time: an independent rerun on the same
+host measured 2.5-2.6 s per 20,000 new rows, against 1.9-2.1 s before the fix
+(about 8,000 rows/s), and 1.7 s for 20,000 redeliveries. Publish-to-SQL latency was 0.82-2.22 s (Compose) and 1.34-2.55 s
 (single container).
 Hardware qualification remains pending.

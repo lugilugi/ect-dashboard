@@ -28,8 +28,8 @@ column. Preserve original source timestamps and GPS fix identity. Use shared SQL
 read models in dashboards; delivery order and metadata arrival are unconstrained.
 
 Read BACKEND_GUIDE.md when changing deployment/environment/schema/bootstrap.
-Telegraf COPY tags remain TEXT in writable ingest views, while owned tables are
-typed. Do not restore json_v2 array timestamp_key on 1.31.3: it repeats the first
+Telegraf COPY tags remain TEXT in the staging tables, while owned tables are
+typed; the ingest_staged job is their only consumer. Do not restore json_v2 array timestamp_key on 1.31.3: it repeats the first
 element's time. Grafana provisioning supports plain environment interpolation;
 defaults belong to container wiring. Both layouts share versions and inputs.
 
