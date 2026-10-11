@@ -41,34 +41,50 @@ void main() {
               nativeDatabases.remove(arguments['id']);
               return null;
             }
-            final sql = arguments['sql'] as String;
-            final parameters = (arguments['arguments'] as List?)
-                ?.cast<Object?>();
-            switch (call.method) {
-              case 'execute':
-                if (RegExp(
-                  r'^\s*(SELECT\b|PRAGMA\s+journal_mode\b)',
-                  caseSensitive: false,
-                ).hasMatch(sql)) {
-                  throw PlatformException(
-                    code: 'sqlite_error',
-                    message:
-                        'Queries can be performed using SQLiteDatabase query '
-                        'or rawQuery methods only.',
-                    details: {'sql': sql, 'arguments': parameters},
-                  );
-                }
-                await database.execute(sql, parameters);
-                return null;
-              case 'query':
-                return database.rawQuery(sql, parameters);
-              case 'insert':
-                return database.rawInsert(sql, parameters);
-              case 'update':
-                return database.rawUpdate(sql, parameters);
-              default:
-                throw MissingPluginException(call.method);
+            Future<Object?> run(String method, Map<Object?, Object?> op) async {
+              final sql = op['sql'] as String;
+              final parameters = (op['arguments'] as List?)?.cast<Object?>();
+              switch (method) {
+                case 'execute':
+                  if (RegExp(
+                    r'^\s*(SELECT\b|PRAGMA\s+journal_mode\b)',
+                    caseSensitive: false,
+                  ).hasMatch(sql)) {
+                    throw PlatformException(
+                      code: 'sqlite_error',
+                      message:
+                          'Queries can be performed using SQLiteDatabase query '
+                          'or rawQuery methods only.',
+                      details: {'sql': sql, 'arguments': parameters},
+                    );
+                  }
+                  await database.execute(sql, parameters);
+                  return null;
+                case 'query':
+                  return database.rawQuery(sql, parameters);
+                case 'insert':
+                  final id = await database.rawInsert(sql, parameters);
+                  // Android SQLiteStatement.executeInsert returns -1 when an
+                  // INSERT OR IGNORE changed no row.
+                  return id <= 0 ? -1 : id;
+                case 'update':
+                  return database.rawUpdate(sql, parameters);
+                default:
+                  throw MissingPluginException(method);
+              }
             }
+
+            if (call.method == 'batch') {
+              final results = <Object?>[];
+              for (final op in (arguments['operations'] as List)) {
+                final operation = (op as Map).cast<Object?, Object?>();
+                results.add({
+                  'result': await run(operation['method'] as String, operation),
+                });
+              }
+              return arguments['noResult'] == true ? null : results;
+            }
+            return run(call.method, arguments);
           });
 
       TelemetryJournal? journal;
@@ -87,7 +103,7 @@ void main() {
         readableCopyEnabled: false,
       );
       journal = openJournal();
-    await journal.initialize();
+      await journal.initialize();
       final record = TelemetryRecord.session({
         'schema_version': 2,
         'uid': '11111111-1111-4111-8111-111111111111',
@@ -97,19 +113,31 @@ void main() {
         'session_state': 'LOGGING',
         'laps_completed': 0,
       });
-    await journal.appendRecords([record]);
-    expect(journal.spoolHealth.storageError, isNull);
+      await journal.appendRecords([record]);
+      expect(journal.spoolHealth.storageError, isNull);
       expect(
-      (await journal.readPending()).single.record.payload,
+        (await journal.readPending()).single.record.payload,
         record.payload,
       );
-    await journal.close();
+      // Retried identical record: the ignored insert reports -1 on Android.
+      final retry = await journal.appendRecords([record]);
+      expect(retry.stored, 0);
+      expect(retry.duplicates, 1);
+      expect(retry.conflicts, isEmpty);
+      expect(journal.pendingCount, 1);
+      await journal.close();
       journal = openJournal();
       expect(
-      (await journal.readPending()).single.record.payload,
+        (await journal.readPending()).single.record.payload,
         record.payload,
       );
-    expect(journal.spoolHealth.storageError, isNull);
+      expect(journal.spoolHealth.storageError, isNull);
+      expect(journal.pendingCount, 1);
+      final id = (await journal.readPending()).single.id;
+      await journal.recordDeliveryRound(acked: [id]);
+      expect(await journal.readPending(), isEmpty);
+      expect(journal.pendingCount, 0);
+      expect(journal.pendingBytes, 0);
     },
   );
 }

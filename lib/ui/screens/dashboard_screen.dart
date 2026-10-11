@@ -816,6 +816,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                               'REJECTED RECORDS: ${state.spoolHealth.rejectedRecordCount}',
                               style: TextStyle(color: Colors.red, fontSize: 12),
                             ),
+                          if (state.spoolHealth.failedRecordCount > 0)
+                            Text(
+                              'FAILED RECORDS: ${state.spoolHealth.failedRecordCount}',
+                              style: TextStyle(color: Colors.red, fontSize: 12),
+                            ),
                           if (state.spoolHealth.storageError != null ||
                               state.spoolHealth.exportError != null) ...[
                             Text(
