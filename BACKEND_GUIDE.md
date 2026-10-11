@@ -5,7 +5,8 @@
 The phone decodes CAN/GPS and owns sessions/laps, commands and live display.
 TelemetryRecorder assigns immutable context; TelemetryJournal commits it and
 the checkpoint; MqttService sends committed pending records. The backend is
-Mosquitto -> Telegraf -> validated SQL -> TimescaleDB read models -> Grafana.
+Mosquitto -> Telegraf -> SQL staging -> validated set-based ingest job ->
+TimescaleDB read models -> Grafana.
 Server CSV subscribes independently; local CSV exports committed journal rows.
 See [the authoritative v2 contract](docs/contracts/telemetry-v2.md).
 
@@ -73,26 +74,61 @@ deliberately in both DB roles and consumers.
 
 | Relation | Responsibility |
 |---|---|
-| schema_metadata | Version, source SHA-256 and initialization time |
+| schema_metadata | Schema version 3 (contract ect.telemetry.v2), source SHA-256, initialization time |
 | sessions | UUID, captured start/end and monotonic metadata revision |
 | telemetry_raw / telemetry_samples | Typed hypertable and read surface |
-| telemetry_ingest_view / sessions_ingest_view | TEXT-tag COPY adapters with validating triggers |
+| telemetry_observations | Original observations only (no sampler snapshots); plot by observed_at |
+| telemetry_ingest / sessions_ingest | Plain TEXT-tag staging tables written by Telegraf COPY |
+| ingest_staged job / ingest_status | 1 s set-based validation/merge; staged backlog and oldest age |
 | ingest_rejections | Malformed/conflicting records and reasons |
-| session_catalog | Discovery even when metrics precede metadata |
-| latest_signals | Latest original observation and source freshness |
-| accumulator_deltas / session_totals / lap_totals | Reset-safe main-energy/distance totals |
+| session_bounds / session_catalog | Ingest-maintained sample bounds; discovery even when metrics precede metadata |
+| latest_session | Newest session across metadata and first samples (alerts); state NULL while metadata is in transit |
+| latest_signal_values / latest_signals | Ingest-maintained latest value per session/signal; view adds source freshness |
+| accumulator_deltas / session_totals / lap_totals | Reset-safe main-energy/distance totals over observations |
 | lap_bounds | Explicit completion diagnostics/elapsed duration |
-| telemetry_seconds / lap_analytics | Shared estimates and complete/in-progress laps |
+| observation_intervals / telemetry_seconds / lap_analytics | Time-weighted shared estimates and complete/in-progress laps |
 | gps_fixes | Coordinates paired by source/fix identity |
 
-telegraf_ingest can insert/select ingest views and read schema_metadata.
-Security-definer triggers validate/cast into owned tables with a fixed search
-path. grafana_reader reads designated surfaces with a 30-second query timeout.
+telegraf_ingest can insert/select the staging tables and read schema_metadata;
+it cannot write owned tables or run the ingest functions. The owner's
+TimescaleDB job ingest_staged runs every second (next run starts 1 s after the
+previous one finishes). Each run claims the oldest committed staging rows (up
+to 20,000 per transaction) with DELETE ... RETURNING, validates every cast and
+CHECK in one pass (pg_input_is_valid on PG16), probes the identity unique
+index for each batch identity, inserts only identities not already stored
+(ON CONFLICT DO NOTHING remains a backstop), compares redeliveries with the
+stored row or first batch arrival, quarantines invalid rows and conflicting
+duplicates in ingest_rejections (received_at = staging time), and upserts
+latest_signal_values and session_bounds in the same statement. The insert
+never targets an existing key: on TimescaleDB 2.17 a multi-row ON CONFLICT
+that hits a compressed chunk can drop or hide other rows of the statement.
+An invariant (inserted + redelivered + invalid = claimed) raises and rolls the
+batch back, leaving rows staged, rather than losing data silently. Rows a Telegraf COPY has not committed stay staged for the next
+run; an advisory lock serializes the job with manual CALL ingest_staged(), so
+no row is processed twice or lost. If a batch still hits a data error, that
+batch is retried row by row so only the offending row is quarantined.
+Operational errors roll back and leave rows staged for retry. A stopped job
+shows as growing ingest_status backlog and, while logging, the stall alert.
+grafana_reader reads designated surfaces with a 30-second query timeout.
 Telemetry has no metadata FK: early metrics are intentionally valid.
+telemetry_raw chunks compress after 2 days, so ordinary late phone uploads land
+in uncompressed chunks. Later redelivery or gap repair into compressed chunks,
+including batches mixing stored and new rows, is idempotent and lossless
+(qualified); each stored-row probe into a compressed chunk decompresses the
+matching segment, so large replays into old data are slower than live ingest.
 
 The first accumulator sample is a baseline. A reset contributes its new
-nonnegative value. Bucket estimates use available data without interpolating
-missing sensors. An observed lap is not automatically completed. Sequence gaps
+nonnegative value. Analytics use original observations only: sampler snapshots
+are excluded from telemetry_seconds, lap statistics and accumulator deltas.
+Each observation holds its value until that signal's next observation, capped
+at its freshness_ms, so change-suppressed steady values keep their time weight
+and outages are never interpolated; a non-ok observation ends the hold.
+telemetry_seconds is a time-weighted regular view rather than a continuous
+aggregate, because hold intervals need window functions; per-session queries
+push the session filter into the index. A second split by a lap boundary or
+an outage yields a partial row; telemetry_seconds exposes speed/power/throttle
+coverage seconds, and lap statistics, shares and distributions weight by them.
+An observed lap is not automatically completed. Sequence gaps
 are provisional until delayed delivery is reconciled. Unsupported temperature
 and auxiliary-energy panels are removed; live alerts check original source age
 and current fault bitfields. Phone temperatures/cells are unavailable until
@@ -106,15 +142,16 @@ SQL column. DBC additions use the generator and can_bindings.dart.
 
 ## Initialization and existing volumes
 
-Fresh-only schema/role initialization records a schema fingerprint. TCP
+Fresh-only schema/role initialization records schema version 3 and a schema
+fingerprint. TCP
 readiness excludes Postgres's temporary initialization socket. Single ingest
 waits for a matching schema; Compose gates readers on DB health. Single health
 also probes broker, CSV HTTP, Grafana and stable worker processes. Qualification
 publishes through both subscriptions; process existence is insufficient.
 
 Old/mismatched schema is unhealthy and preserved. Startup never silently drops
-or upgrades it. Use the [explicit paired clean cutover](docs/implementation/cutover.md)
-for this breaking release. Future upgrades need a versioned upgrade path.
+or upgrades it. Use the [explicit clean cutover](docs/implementation/cutover.md) for the
+schema 2 -> 3 server reset (wire contract unchanged). Future upgrades need a versioned upgrade path.
 
 For manual fresh bootstrap, set PGHOST/PORT/DATABASE/USER/PASSWORD plus
 TELEGRAF_PASSWORD/GRAFANA_READER_PASSWORD and run
