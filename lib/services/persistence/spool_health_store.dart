@@ -16,6 +16,47 @@ class SpoolHealthStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Clears a previous storage error without notifying when nothing changed,
+  /// so the hot commit path does not rebuild listeners on every save.
+  void clearStorageError() {
+    if (storageError == null) return;
+    storageError = null;
+    notifyListeners();
+  }
+
+  /// Records rejected because the pending byte budget was exhausted. Each
+  /// rejected record is counted once; it is also part of
+  /// [rejectedRecordCount].
+  int quotaRejectedRecordCount = 0;
+  void recordQuotaRejection(int count, {required String message}) {
+    if (count <= 0) return;
+    quotaRejectedRecordCount += count;
+    rejectedRecordCount += count;
+    storageError = message;
+    notifyListeners();
+  }
+
+  /// Rows in the journal_failed table: records whose identity already existed
+  /// with different content. They are retained for diagnosis, never sent.
+  int _failedRecordCount = 0;
+  int get failedRecordCount => _failedRecordCount;
+  void updateFailedRecordCount(int count) {
+    final next = count < 0 ? 0 : count;
+    if (next == _failedRecordCount) return;
+    _failedRecordCount = next;
+    notifyListeners();
+  }
+
+  /// Last delivery-path failure (connect, publish bookkeeping); null when the
+  /// sender is healthy. Independent of storage/export errors.
+  String? _deliveryError;
+  String? get deliveryError => _deliveryError;
+  void updateDeliveryError(String? error) {
+    if (error == _deliveryError) return;
+    _deliveryError = error;
+    notifyListeners();
+  }
+
   int _pendingPublishCount = 0;
   DateTime? _oldestEnqueuedAtUtc;
   int _oldestAgeMs = 0;

@@ -197,31 +197,31 @@ The phone records roughly 350–400 records/s while driving, but uploads at most
 
 `lib/services/transport/mqtt_service.dart` sends one 32-record batch, waits for PUBACK, stops after 8 batches and runs once a second (lines 36, 99–102).
 
-- [ ] Keep up to 8 batches in flight at once (Mosquitto allows 20 per client). Read about 256 pending records per pass.
-- [ ] Keep pumping while a backlog exists, and trigger a send right after each journal commit instead of waiting for the 1 s tick.
-- [ ] Build each envelope by joining the stored `payload_json` strings and summing `payload_bytes`. Today `encode()` re-encodes and re-decodes the whole batch for every record added (lines 106–115).
-- [ ] Mark a whole round as acknowledged in one transaction (`UPDATE … WHERE id IN (…)`), with the attempt count folded into the same statement.
-- [ ] Add exponential reconnect backoff (1 s up to 15 s), resetting on success.
+- [x] Keep up to 8 batches in flight at once (Mosquitto allows 20 per client). Read about 256 pending records per pass.
+- [x] Keep pumping while a backlog exists, and trigger a send right after each journal commit instead of waiting for the 1 s tick.
+- [x] Build each envelope by joining the stored `payload_json` strings and summing `payload_bytes`. Today `encode()` re-encodes and re-decodes the whole batch for every record added (lines 106–115).
+- [x] Mark a whole round as acknowledged in one transaction (`UPDATE … WHERE id IN (…)`), with the attempt count folded into the same statement.
+- [x] Add exponential reconnect backoff (1 s up to 15 s), resetting on success.
 - **Target:** at least 1,500 records/s on a LAN qualification run, and a 10-minute offline backlog clears in under 3 minutes.
 
 ### 1.2 Stop the storage-limit recording stall
 
 When the pending limit is hit, `appendRecords` writes loss rows and then throws (`telemetry_journal.dart:173–212`). `_commit` only clears its buffer on success (`telemetry_recorder.dart:197–198`). It therefore retries the same batch every 50 ms and adds up to 240 rows to the never-pruned `recording_losses` table each time. All new capture is dropped while this happens.
 
-- [ ] Return a result from `appendRecords` (stored / rejected-for-quota) instead of throwing after commit. On rejection, clear those records from the buffer and count the loss once.
-- [ ] Store one `recording_losses` row per rejected batch with a count, not one per record. Prune it alongside the journal.
-- [ ] Move a record that fails permanently (a conflicting identity) into a `journal_failed` table and continue. Show the count in Storage health.
-- [ ] Add a test that fills the budget, drains it, and checks that recording resumes and losses are counted once.
+- [x] Return a result from `appendRecords` (stored / rejected-for-quota) instead of throwing after commit. On rejection, clear those records from the buffer and count the loss once.
+- [x] Store one `recording_losses` row per rejected batch with a count, not one per record. Prune it alongside the journal.
+- [x] Move a record that fails permanently (a conflicting identity) into a `journal_failed` table and continue. Show the count in Storage health.
+- [x] Add a test that fills the budget, drains it, and checks that recording resumes and losses are counted once.
 
 ### 1.3 Keep journal saves cheap as the backlog grows
 
 Each 50 ms save runs one lookup per record and adds up all pending bytes. `refreshHealth()` then runs a second full count/size/oldest query (lines 152–168, 335–352).
 
-- [ ] Keep pending bytes and count in memory, loaded once at open. Adjust them inside insert, ack and drop. Optionally mirror them in a one-row `journal_stats` table updated in the same transaction.
-- [ ] Use `INSERT OR IGNORE` and only read the existing row when the insert was skipped, to compare content.
-- [ ] Read "oldest pending" from the lowest pending `id` (indexed) instead of `min(enqueued_at_utc)`.
-- [ ] Raise the commit interval from 50 ms to 200–250 ms, and only rewrite the checkpoint when its JSON changes. This cuts fsyncs roughly 4×. Keep `synchronous=FULL`.
-- [ ] Raise the capture buffer to cover a 1 s stall at peak rate (about 600 records).
+- [x] Keep pending bytes and count in memory, loaded once at open. Adjust them inside insert, ack and drop. Optionally mirror them in a one-row `journal_stats` table updated in the same transaction.
+- [x] Use `INSERT OR IGNORE` and only read the existing row when the insert was skipped, to compare content.
+- [x] Read "oldest pending" from the lowest pending `id` (indexed) instead of `min(enqueued_at_utc)`.
+- [x] Raise the commit interval from 50 ms to 200–250 ms, and only rewrite the checkpoint when its JSON changes. This cuts fsyncs roughly 4×. Keep `synchronous=FULL`.
+- [x] Raise the capture buffer to cover a 1 s stall at peak rate (about 600 records).
 - **Target:** save time stays flat (under 10 ms on a mid-range phone) with 500k pending records.
 
 ---

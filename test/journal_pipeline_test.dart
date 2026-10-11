@@ -120,7 +120,12 @@ void main() {
       final recorder = TelemetryRecorder(state, journal: journal);
       await recorder.start();
       state.startSession('overflow');
-      for (var value = 0; value < 400; value++) {
+      // Synchronous capture beyond the bounded queue, before any commit runs.
+      for (
+        var value = 0;
+        value < TelemetryRecorder.metricCapacity + 100;
+        value++
+      ) {
         recorder.record('Voltage_780', value.toDouble(), unit: 'V');
       }
       state.stopSession();

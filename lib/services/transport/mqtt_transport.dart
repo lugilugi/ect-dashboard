@@ -89,6 +89,8 @@ class MqttServerClientTransport implements MqttTransport {
     return _client.connectionStatus?.state == MqttConnectionState.connected;
   }
 
+  /// Safe to call concurrently: each QoS1 publish waits for the PUBACK that
+  /// carries its own message id. A PUBACK is a broker handoff only.
   @override
   Future<bool> publish({
     required String topic,
@@ -97,37 +99,45 @@ class MqttServerClientTransport implements MqttTransport {
     if (!isConnected) {
       return false;
     }
+    final Completer<bool> completer;
+    final int id;
     try {
+      // Subscribe before sending so an acknowledgement is never missed.
+      _ackSubscription ??= _client.publishingManagerForAcks?.published.stream
+          .listen(_handlePublished);
       final builder = MqttClientPayloadBuilder();
       builder.addString(payloadJson);
-      final id = _client.publishMessage(
-        topic,
-        MqttQos.atLeastOnce,
-        builder.payload!,
-      );
+      id = _client.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
       if (id <= 0) {
         return false;
       }
-
-      final completer = Completer<bool>();
+      completer = Completer<bool>();
+      // Message ids wrap at 65535; if an id is reused while an older publish
+      // is still registered, that older publish can no longer be matched to
+      // its PUBACK, so it fails (and is retried) instead of hanging.
+      final previous = _pendingAcks[id];
+      if (previous != null && !previous.isCompleted) previous.complete(false);
       _pendingAcks[id] = completer;
-      _ackSubscription ??= _client.publishingManagerForAcks?.published.stream
-          .listen((msg) {
-            final ackId = msg.variableHeader?.messageIdentifier;
-            if (ackId == null) {
-              return;
-            }
-            final pending = _pendingAcks.remove(ackId);
-            if (pending != null && !pending.isCompleted) {
-              pending.complete(true);
-            }
-          });
-      final timer = Timer(ackTimeout, () {
-        _pendingAcks.remove(id)?.complete(false);
-      });
-      return await completer.future.whenComplete(timer.cancel);
     } catch (_) {
+      // Client-side send failure (socket closed mid-publish); caller retries.
       return false;
+    }
+    final timer = Timer(ackTimeout, () {
+      // Only time out our own registration, never a later reuse of the id.
+      if (identical(_pendingAcks[id], completer)) _pendingAcks.remove(id);
+      if (!completer.isCompleted) completer.complete(false);
+    });
+    return completer.future.whenComplete(timer.cancel);
+  }
+
+  void _handlePublished(MqttPublishMessage msg) {
+    final ackId = msg.variableHeader?.messageIdentifier;
+    if (ackId == null) {
+      return;
+    }
+    final pending = _pendingAcks.remove(ackId);
+    if (pending != null && !pending.isCompleted) {
+      pending.complete(true);
     }
   }
 }

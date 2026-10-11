@@ -93,10 +93,14 @@ void main() {
         maxPendingBytes: 20,
       );
       addTearDown(journal.close);
-      await expectLater(journal.appendRecords([metric(1)]), throwsStateError);
+      // Quota rejection is a typed policy outcome, not an exception.
+      final result = await journal.appendRecords([metric(1)]);
+      expect(result.quotaRejected, 1);
+      expect(result.stored, 0);
       expect(await journal.readPending(), isEmpty);
       expect(journal.spoolHealth.storageError, contains('budget'));
       expect(journal.spoolHealth.rejectedRecordCount, 1);
+      expect(journal.spoolHealth.quotaRejectedRecordCount, 1);
       expect(await journal.maxSequence(metric(1).sessionId), 1);
       await journal.close();
     },
