@@ -59,9 +59,6 @@ class TelemetryRecorder {
   /// Losses (capture overflow or quota) not yet carried by a queued
   /// Recording_Loss record.
   int _unreportedLosses = 0;
-
-  /// Queued Recording_Loss records by journal key, with the count each carries.
-  final Map<String, int> _lossRecords = {};
   Future<void>? _flushing;
   bool _started = false;
   String _metadataKey = '';
@@ -151,11 +148,9 @@ class TelemetryRecorder {
     }
   }
 
-  void _enqueue(TelemetryRecord record, {bool control = false}) {
+  void _enqueue(TelemetryRecord record) {
     if (journal == null) return;
-    final capacity = record.kind == TelemetryRecordKind.session || control
-        ? controlCapacity
-        : metricCapacity;
+    final capacity = record.control ? controlCapacity : metricCapacity;
     if (_buffer.length >= capacity) {
       _unreportedLosses++;
       journal!.spoolHealth.updateRecordingErrors(
@@ -234,14 +229,8 @@ class TelemetryRecorder {
         quality: 'invalid',
         diagnostic: true,
       );
-      if (event == null) {
-        _unreportedLosses += losses;
-      } else {
-        final key =
-            '${TelemetryRecordKind.metric.name}/'
-            '${event.sessionId}/${event.seqInSession}';
-        _lossRecords[key] = losses;
-      }
+      // No session yet: keep the count for the next commit.
+      if (event == null) _unreportedLosses += losses;
     }
     final records = List<TelemetryRecord>.of(_buffer);
     final active =
@@ -285,16 +274,9 @@ class TelemetryRecorder {
     // Every record of this batch reached a terminal outcome (stored,
     // duplicate, quota-rejected or moved to journal_failed).
     _buffer.removeRange(0, records.length);
-    for (final key in result.quotaRejectedKeys) {
-      // A rejected loss report carries its count forward instead of counting
-      // as a new loss, so a full journal cannot generate a feedback loop.
-      _unreportedLosses += _lossRecords[key] ?? 1;
-    }
-    for (final record in records) {
-      if (record.kind == TelemetryRecordKind.metric) {
-        _lossRecords.remove(record.key);
-      }
-    }
+    // Only capture metrics are quota-rejected; the Recording_Loss carrier is
+    // a control record and is always stored, so it cannot loop.
+    _unreportedLosses += result.quotaRejected;
   }
 
   /// Compares checkpoints ignoring the volatile `updated_at_utc` stamp.
@@ -451,7 +433,7 @@ class TelemetryRecorder {
       sourceSampleId: observation.sampleId,
       freshnessMs: observation.freshnessMs,
     );
-    _enqueue(TelemetryRecord.metric(event), control: kind == 'diagnostic');
+    _enqueue(TelemetryRecord.metric(event));
     return event;
   }
 }

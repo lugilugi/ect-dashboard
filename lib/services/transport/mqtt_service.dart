@@ -49,7 +49,12 @@ class MqttService {
   final TelemetryJournal journal;
   final bool _injectedTransport;
   final int maxInFlight;
+
+  /// Rows read per round when the backlog is empty or made of large records.
   final int readLimit;
+
+  /// Upper bound on rows read per round.
+  final int maxReadLimit;
   final Duration minReconnectDelay;
   final Duration maxReconnectDelay;
   final Duration fallbackInterval;
@@ -80,6 +85,7 @@ class MqttService {
     MqttTransport? transport,
     this.maxInFlight = 8,
     this.readLimit = 256,
+    this.maxReadLimit = 4096,
     this.minReconnectDelay = const Duration(seconds: 1),
     this.maxReconnectDelay = const Duration(seconds: 15),
     this.fallbackInterval = const Duration(seconds: 1),
@@ -206,11 +212,22 @@ class MqttService {
     }
   }
 
+  /// Rows to read per round: enough to fill [maxInFlight] full envelopes at
+  /// the backlog's average record size (from the journal's in-memory
+  /// accounting), clamped to [readLimit]..[maxReadLimit].
+  int get roundReadLimit {
+    final count = journal.pendingCount;
+    if (count <= 0) return readLimit;
+    final average = journal.pendingBytes ~/ count;
+    final rows = maxInFlight * packetBytes ~/ (average + 1);
+    return rows.clamp(readLimit, maxReadLimit);
+  }
+
   Future<void> _pump() async {
     while (!_halted) {
       final transport = _transport;
       if (transport == null || !transport.isConnected) return;
-      final pending = await journal.readPending(limit: readLimit);
+      final pending = await journal.readPending(limit: roundReadLimit);
       if (pending.isEmpty) return;
       final round = await _selectRound(pending);
       if (round.isEmpty) continue;

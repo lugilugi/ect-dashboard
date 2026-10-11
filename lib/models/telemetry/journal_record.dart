@@ -9,18 +9,25 @@ class TelemetryRecord {
   final int identityNumber;
   final String payloadJson;
 
+  /// Control/diagnostic records (session metadata, lap, recovery and loss
+  /// events) are small and define SQL session/lap structure, so they are
+  /// exempt from the pending byte budget. Only capture metrics are shed.
+  final bool control;
+
   const TelemetryRecord({
     required this.kind,
     required this.sessionId,
     required this.identityNumber,
     required this.payloadJson,
-  });
+    bool control = false,
+  }) : control = control || kind == TelemetryRecordKind.session;
 
   factory TelemetryRecord.metric(DecodedMetricEvent event) => TelemetryRecord(
     kind: TelemetryRecordKind.metric,
     sessionId: event.sessionId,
     identityNumber: event.seqInSession,
     payloadJson: jsonEncode(event.toJson()),
+    control: event.sampleKind == 'diagnostic',
   );
 
   factory TelemetryRecord.session(Map<String, dynamic> metadata) =>

@@ -121,7 +121,10 @@ void main() {
 
   test('quota rejection is one loss row; metadata is still stored', () async {
     final size = utf8ByteLength(metric(1).payloadJson);
-    final journal = journalAt(maxPendingBytes: size * 2);
+    // Room for two metrics plus the always-stored metadata record.
+    final journal = journalAt(
+      maxPendingBytes: size * 2 + utf8ByteLength(sessionRecord(1).payloadJson),
+    );
     final result = await journal.appendRecords([
       for (var i = 1; i <= 5; i++) metric(i),
       sessionRecord(1),
@@ -240,7 +243,7 @@ void main() {
 
     state.startSession('quota');
     for (var i = 0; i < 40; i++) {
-      recorder.record('Probe', i.toDouble(), source: 'app', diagnostic: true);
+      recorder.record('Probe', i.toDouble(), source: 'app');
     }
     await recorder.flush();
     expect(recorder.bufferedRecordCount, 0, reason: 'quota is terminal');
@@ -287,5 +290,182 @@ void main() {
     expect(pending.map((r) => r.record.identityNumber), [2, 4]);
     expect(pending.first.attempts, 1);
     expect(journal.pendingCount, 2);
+  });
+
+  group('review fixes', () {
+    TelemetryRecord lap(int seq) => TelemetryRecord.metric(
+      DecodedMetricEvent(
+        metricKey: 'Lap_Completed',
+        value: 1,
+        sessionId: _session,
+        lapNumber: 1,
+        sessionState: SessionState.logging,
+        lapPhase: LapPhase.running,
+        tsWallUtc: DateTime.utc(2026, 10, 6),
+        tsSessionMs: 0,
+        source: 'app',
+        seqInSession: seq,
+        sampleKind: 'diagnostic',
+      ),
+    );
+
+    test('control metrics are stored while the budget is full', () async {
+      expect(lap(1).control, isTrue);
+      expect(metric(1).control, isFalse);
+      expect(sessionRecord(1).control, isTrue);
+      final journal = journalAt(
+        maxPendingBytes: utf8ByteLength(metric(1).payloadJson),
+      );
+      expect((await journal.appendRecords([metric(1)])).stored, 1);
+      final result = await journal.appendRecords([metric(2), lap(3)]);
+      expect(result.quotaRejectedKeys, [metric(2).key]);
+      expect(result.stored, 1);
+      final keys = (await journal.readPending()).map((r) => r.record.key);
+      expect(keys, contains(lap(3).key));
+    });
+
+    test('duplicates add no bytes and do not cause quota rejection', () async {
+      final size = utf8ByteLength(metric(1).payloadJson);
+      final journal = journalAt(maxPendingBytes: size * 3);
+      await journal.appendRecords([metric(1), metric(2)]);
+      // Retry of 1 and 2 plus one new record that fits the remaining room.
+      final result = await journal.appendRecords([
+        metric(1),
+        metric(2),
+        metric(3),
+      ]);
+      expect(result.stored, 1);
+      expect(result.duplicates, 2);
+      expect(result.quotaRejected, 0);
+      expect(journal.pendingCount, 3);
+    });
+
+    test(
+      'sustained quota: one loss row, no phantom counts or seq gaps',
+      () async {
+        final state = DashboardState();
+        addTearDown(state.dispose);
+        final journal = journalAt(maxPendingBytes: 6000);
+        final recorder = TelemetryRecorder(state, journal: journal);
+        await recorder.start();
+        state.startSession('sustained');
+        expect(state.isLogging, isTrue);
+        var value = 0;
+        for (var cycle = 0; cycle < 6; cycle++) {
+          for (var i = 0; i < 20; i++) {
+            recorder.record('Voltage_780', (value++).toDouble(), unit: 'V');
+          }
+          await recorder.flush();
+        }
+        await recorder.flush(); // reports the last cycle's losses
+        final rejected = journal.spoolHealth.quotaRejectedRecordCount;
+        expect(rejected, greaterThan(60), reason: 'quota stayed full');
+        expect(journal.spoolHealth.rejectedRecordCount, rejected);
+
+        final rows = await journal.readPending(limit: 10000);
+        final metrics = rows
+            .where((r) => r.record.kind == TelemetryRecordKind.metric)
+            .toList();
+        final reported = metrics
+            .map((r) => r.record.payload)
+            .where((p) => p['signal_name'] == 'Recording_Loss')
+            .fold<double>(0, (sum, p) => sum + (p['value'] as num));
+        expect(reported, rejected.toDouble());
+        // Every sequence is either stored or one of the counted losses.
+        final seqs = metrics.map((r) => r.record.identityNumber).toSet();
+        expect(seqs.length, metrics.length);
+        expect(seqs.length + rejected, recorder.sequence);
+
+        final db = await databaseFactoryFfi.openDatabase(
+          '${dir.path}/journal.db',
+          options: OpenDatabaseOptions(singleInstance: false),
+        );
+        addTearDown(db.close);
+        final losses = await db.query('recording_losses');
+        expect(losses, hasLength(1));
+        expect(losses.single['record_count'], rejected);
+        await recorder.stop();
+      },
+    );
+
+    test(
+      'a failed delivery round leaves in-memory accounting unchanged',
+      () async {
+        final journal = journalAt();
+        await journal.appendRecords([metric(1), metric(2), metric(3)]);
+        final pending = await journal.readPending();
+        final before = (journal.pendingCount, journal.pendingBytes);
+        final db = await databaseFactoryFfi.openDatabase(
+          '${dir.path}/journal.db',
+          options: OpenDatabaseOptions(singleInstance: false),
+        );
+        await db.execute(
+          "CREATE TRIGGER fail_round BEFORE UPDATE OF attempt_count ON journal "
+          "WHEN NEW.id=${pending[2].id} BEGIN SELECT RAISE(ABORT,'boom'); END",
+        );
+        await db.close();
+        await expectLater(
+          journal.recordDeliveryRound(
+            acked: [pending[0].id, pending[1].id],
+            failed: [pending[2].id],
+            error: 'x',
+          ),
+          throwsA(anything),
+        );
+        expect(journal.pendingCount, before.$1);
+        expect(journal.pendingBytes, before.$2);
+        // The rolled-back rows are still pending; acking them later works.
+        await journal.recordDeliveryRound(
+          acked: [pending[0].id, pending[1].id],
+        );
+        expect(journal.pendingCount, 1);
+        expect(journal.spoolHealth.oldestEnqueuedAtUtc, isNotNull);
+        final bytes = journal.pendingBytes;
+        await journal.close();
+        final reopened = journalAt();
+        await reopened.initialize();
+        expect(reopened.pendingCount, 1);
+        expect(reopened.pendingBytes, bytes);
+      },
+    );
+
+    test('sender reads enough rows to fill every in-flight message', () {
+      final state = DashboardState();
+      addTearDown(state.dispose);
+      final journal = journalAt();
+      final sender = MqttService(
+        state,
+        journal: journal,
+        transport: HeldTransport(),
+      );
+      expect(sender.roundReadLimit, sender.readLimit);
+      expect(
+        MqttServerClientTransport.ackDeadline(
+          const Duration(seconds: 5),
+          const Duration(seconds: 1),
+          7,
+        ),
+        const Duration(seconds: 12),
+      );
+    });
+
+    test('round read limit scales with average record size', () async {
+      final state = DashboardState();
+      addTearDown(state.dispose);
+      final journal = journalAt();
+      await journal.appendRecords([for (var i = 1; i <= 50; i++) metric(i)]);
+      final sender = MqttService(
+        state,
+        journal: journal,
+        transport: HeldTransport(),
+      );
+      final average = journal.pendingBytes ~/ journal.pendingCount;
+      final expected = (8 * MqttService.packetBytes ~/ (average + 1)).clamp(
+        sender.readLimit,
+        sender.maxReadLimit,
+      );
+      expect(sender.roundReadLimit, expected);
+      expect(sender.roundReadLimit, greaterThan(sender.readLimit));
+    });
   });
 }

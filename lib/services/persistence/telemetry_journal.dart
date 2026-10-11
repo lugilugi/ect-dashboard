@@ -88,6 +88,10 @@ class TelemetryJournal {
   int _failedCount = 0;
   int _lastCommittedId = 0;
 
+  /// recording_losses row extended while a quota loss is sustained.
+  int? _openLossRowId;
+  String? _openLossSession;
+
   TelemetryJournal({
     this.databasePath,
     this.factory,
@@ -258,7 +262,7 @@ class TelemetryJournal {
     )).single;
     _pendingCount = row['count'] as int;
     _pendingBytes = row['bytes'] as int;
-    await _readOldest(db);
+    _applyOldest(await _readOldest(db));
     _failedCount = Sqflite.firstIntValue(
       await db.rawQuery('SELECT count(*) FROM journal_failed'),
     )!;
@@ -271,21 +275,23 @@ class TelemetryJournal {
     );
   }
 
-  /// Lowest pending id via the journal_pending index.
-  Future<void> _readOldest(DatabaseExecutor db) async {
+  /// Lowest pending id via the journal_pending index. Callers inside a
+  /// transaction apply the result only after it commits.
+  static Future<(int?, DateTime?)> _readOldest(DatabaseExecutor db) async {
     final rows = await db.rawQuery(
       "SELECT id,enqueued_at_utc FROM journal WHERE delivery_state='pending' "
       'ORDER BY id LIMIT 1',
     );
-    if (rows.isEmpty) {
-      _oldestPendingId = null;
-      _oldestPendingAtUtc = null;
-    } else {
-      _oldestPendingId = rows.single['id'] as int;
-      _oldestPendingAtUtc = DateTime.parse(
-        rows.single['enqueued_at_utc'] as String,
-      );
-    }
+    if (rows.isEmpty) return (null, null);
+    return (
+      rows.single['id'] as int,
+      DateTime.parse(rows.single['enqueued_at_utc'] as String),
+    );
+  }
+
+  void _applyOldest((int?, DateTime?) oldest) {
+    _oldestPendingId = oldest.$1;
+    _oldestPendingAtUtc = oldest.$2;
   }
 
   void _publishHealth() {
@@ -302,12 +308,15 @@ class TelemetryJournal {
 
   /// Commits [records] (and optionally the control checkpoint) atomically.
   ///
-  /// Policies: within-budget records are stored; metric records beyond the
+  /// Policies: within-budget records are stored; capture metrics beyond the
   /// pending byte budget are rejected for quota (identity consumed, counted
-  /// once); session metadata records are always stored, even when metrics are
-  /// rejected, because they are tiny and the SQL metadata depends on them; a
-  /// record whose identity exists with different content goes to
-  /// `journal_failed`. SQLite/I/O errors propagate and roll back the batch.
+  /// once, a sustained loss extends one `recording_losses` row); control
+  /// records ([TelemetryRecord.control]: session metadata, lap, recovery and
+  /// loss events) are always stored because they are tiny and SQL session/lap
+  /// structure depends on them; a record whose identity exists with different
+  /// content goes to `journal_failed`. Duplicates add no pending bytes and do
+  /// not cause quota rejection. SQLite/I/O errors propagate and roll back the
+  /// batch.
   Future<AppendResult> appendRecords(
     List<TelemetryRecord> records, {
     String? checkpointJson,
@@ -365,42 +374,35 @@ class TelemetryJournal {
     // sequence/revision is never reused after rejection or conflict.
     final sequences = <String, int>{};
     final revisions = <String, int>{};
-    var budget = _pendingBytes;
-    var overBudget = false;
-    final candidates = <TelemetryRecord>[];
-    final sizes = <int>[];
-    final rejected = <TelemetryRecord>[];
+    final sizeOf = <String, int>{};
+    var totalBytes = 0;
     for (final record in unique.values) {
-      final metric = record.kind == TelemetryRecordKind.metric;
-      final marks = metric ? sequences : revisions;
+      final marks = record.kind == TelemetryRecordKind.metric
+          ? sequences
+          : revisions;
       marks[record.sessionId] = math.max(
         marks[record.sessionId] ?? 0,
         record.identityNumber,
       );
       final bytes = utf8ByteLength(record.payloadJson);
-      if (metric && (overBudget || budget + bytes > maxPendingBytes)) {
-        // Once full, reject the rest of this append's metrics so the loss is
-        // one contiguous range.
-        overBudget = true;
-        rejected.add(record);
-        continue;
-      }
-      candidates.add(record);
-      sizes.add(bytes);
-      budget += bytes;
+      sizeOf[record.key] = bytes;
+      totalBytes += bytes;
     }
 
     var insertedCount = 0;
     var insertedBytes = 0;
+    var capturedInserted = 0;
     var duplicates = 0;
     int? minInserted;
     int? maxInserted;
+    var rejected = <TelemetryRecord>[];
+    int? lossRowId;
     await _db!.transaction((tx) async {
       final skipped = <TelemetryRecord>[];
-      if (candidates.isNotEmpty) {
+      Future<void> insertAll(List<TelemetryRecord> batch) async {
+        if (batch.isEmpty) return;
         final insert = tx.batch();
-        for (var i = 0; i < candidates.length; i++) {
-          final record = candidates[i];
+        for (final record in batch) {
           insert.rawInsert(
             'INSERT OR IGNORE INTO journal(record_key,kind,session_uid,'
             'identity_number,payload_json,payload_bytes,enqueued_at_utc) '
@@ -411,25 +413,58 @@ class TelemetryJournal {
               record.sessionId,
               record.identityNumber,
               record.payloadJson,
-              sizes[i],
+              sizeOf[record.key],
               nowIso,
             ],
           );
         }
         final ids = await insert.commit();
-        for (var i = 0; i < candidates.length; i++) {
+        for (var i = 0; i < batch.length; i++) {
           final id = ids[i];
           // FFI returns null and Android returns -1 when the insert was ignored.
           if (id is int && id > 0) {
             insertedCount++;
-            insertedBytes += sizes[i];
+            insertedBytes += sizeOf[batch[i].key]!;
+            if (!batch[i].control) capturedInserted++;
             minInserted = math.min(minInserted ?? id, id);
             maxInserted = math.max(maxInserted ?? id, id);
           } else {
-            skipped.add(candidates[i]);
+            skipped.add(batch[i]);
           }
         }
       }
+
+      if (_pendingBytes + totalBytes <= maxPendingBytes) {
+        // Common case: everything fits; keep capture order.
+        await insertAll(unique.values.toList());
+      } else {
+        // Control records (metadata, lap, recovery, loss) are always stored.
+        // Capture metrics are admitted in order against the bytes actually
+        // pending; an ignored duplicate adds no bytes, so its room is
+        // offered to the next records. The first record that does not fit
+        // ends admission, so the loss is one contiguous range.
+        final capture = <TelemetryRecord>[];
+        final control = <TelemetryRecord>[];
+        for (final record in unique.values) {
+          (record.control ? control : capture).add(record);
+        }
+        await insertAll(control);
+        var next = 0;
+        while (next < capture.length) {
+          var room = maxPendingBytes - (_pendingBytes + insertedBytes);
+          final round = <TelemetryRecord>[];
+          while (next < capture.length && sizeOf[capture[next].key]! <= room) {
+            room -= sizeOf[capture[next].key]!;
+            round.add(capture[next++]);
+          }
+          if (round.isEmpty) break;
+          final skippedBefore = skipped.length;
+          await insertAll(round);
+          if (skipped.length == skippedBefore) break;
+        }
+        rejected = capture.sublist(next);
+      }
+
       void classifyStored(TelemetryRecord record, String stored) {
         if (stored == record.payloadJson) {
           duplicates++;
@@ -464,6 +499,29 @@ class TelemetryJournal {
           return true;
         });
       }
+      if (rejected.isNotEmpty) {
+        // A sustained loss (no capture stored since the last rejection, same
+        // session) extends one recording_losses row instead of adding one
+        // per commit.
+        final open = _openLossRowId;
+        var extended = 0;
+        if (open != null && _openLossSession == rejected.first.sessionId) {
+          extended = await tx.rawUpdate(
+            'UPDATE recording_losses SET record_count=record_count+?,'
+            'last_record_key=? WHERE id=?',
+            [rejected.length, rejected.last.key, open],
+          );
+        }
+        lossRowId = extended > 0
+            ? open
+            : await tx.insert('recording_losses', {
+                'record_key': rejected.first.key,
+                'last_record_key': rejected.last.key,
+                'record_count': rejected.length,
+                'recorded_at_utc': nowIso,
+                'reason': quotaLossReason,
+              });
+      }
       final tail = tx.batch();
       for (final sessionId in {...sequences.keys, ...revisions.keys}) {
         tail.rawInsert(
@@ -472,15 +530,6 @@ class TelemetryJournal {
           sequence=max(sequence,excluded.sequence),revision=max(revision,excluded.revision)''',
           [sessionId, sequences[sessionId] ?? 0, revisions[sessionId] ?? 0],
         );
-      }
-      if (rejected.isNotEmpty) {
-        tail.insert('recording_losses', {
-          'record_key': rejected.first.key,
-          'last_record_key': rejected.last.key,
-          'record_count': rejected.length,
-          'recorded_at_utc': nowIso,
-          'reason': quotaLossReason,
-        });
       }
       for (final failure in failures) {
         tail.insert('journal_failed', {
@@ -508,6 +557,13 @@ class TelemetryJournal {
     _failedCount += failures.length;
     if (maxInserted != null) {
       _lastCommittedId = math.max(_lastCommittedId, maxInserted!);
+    }
+    if (rejected.isNotEmpty) {
+      _openLossRowId = lossRowId;
+      _openLossSession = rejected.first.sessionId;
+    } else if (capturedInserted > 0) {
+      _openLossRowId = null;
+      _openLossSession = null;
     }
     return AppendResult(
       stored: insertedCount,
@@ -588,6 +644,7 @@ class TelemetryJournal {
       final oldest = _oldestPendingId;
       final reReadOldest = oldest != null && acked.contains(oldest);
       final nowIso = DateTime.now().toUtc().toIso8601String();
+      (int?, DateTime?)? nextOldest;
       await _db!.transaction((tx) async {
         for (final chunk in _chunks(acked)) {
           final ids = chunk.join(',');
@@ -611,10 +668,11 @@ class TelemetryJournal {
             [error],
           );
         }
-        if (reReadOldest) await _readOldest(tx);
+        if (reReadOldest) nextOldest = await _readOldest(tx);
       });
       _pendingCount -= ackedCount;
       _pendingBytes -= ackedBytes;
+      if (nextOldest != null) _applyOldest(nextOldest!);
     });
     _publishHealth();
   }
@@ -645,6 +703,7 @@ class TelemetryJournal {
     await _serialized(() async {
       var count = 0;
       var bytes = 0;
+      (int?, DateTime?)? nextOldest;
       await _db!.transaction((tx) async {
         final row = (await tx.rawQuery(
           'SELECT count(*) AS count,COALESCE(sum(payload_bytes),0) AS bytes '
@@ -659,10 +718,11 @@ class TelemetryJournal {
           where: "id=? AND delivery_state='pending'",
           whereArgs: [id],
         );
-        if (id == _oldestPendingId) await _readOldest(tx);
+        if (id == _oldestPendingId) nextOldest = await _readOldest(tx);
       });
       _pendingCount -= count;
       _pendingBytes -= bytes;
+      if (nextOldest != null) _applyOldest(nextOldest!);
     });
     spoolHealth.updateRecordingErrors(
       storage: reason,
@@ -823,6 +883,8 @@ class TelemetryJournal {
         }
         await tx.update('export_state', {'last_id': 0});
       });
+      _openLossRowId = null;
+      _openLossSession = null;
       await _recount(_db!);
     });
     await _writer.clearAllFiles();
