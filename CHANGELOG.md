@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.0-rc.6 — 13 October 2026
 
 ### Backend (SQL schema 3, new fingerprint)
 
